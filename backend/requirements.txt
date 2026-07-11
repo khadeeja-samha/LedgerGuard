@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+tree-sitter==0.25.2
+tree-sitter-solidity
+python-multipart
+pydantic
+pytest
