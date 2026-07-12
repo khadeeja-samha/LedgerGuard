@@ -5,3 +5,7 @@ tree-sitter-solidity
 python-multipart
 pydantic
 pytest
+neo4j
+python-dotenv
+web3
+requests

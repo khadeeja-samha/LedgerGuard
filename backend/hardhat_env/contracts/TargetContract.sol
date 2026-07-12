@@ -1,0 +1,1 @@
+contract Malformed { syntax error here }

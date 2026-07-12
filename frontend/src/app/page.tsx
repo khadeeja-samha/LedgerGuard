@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import GraphViewer from './components/GraphViewer';
 
 export default function Home() {
   const [sourceCode, setSourceCode] = useState('');
@@ -54,14 +55,19 @@ export default function Home() {
         </div>
       )}
 
-      {response && (
+      {response && response.contract_id ? (
+        <div style={{ marginTop: '1rem' }}>
+          <h2>Analysis Graph:</h2>
+          <GraphViewer contractId={response.contract_id} />
+        </div>
+      ) : response ? (
         <div style={{ marginTop: '1rem' }}>
           <h2>Response:</h2>
           <pre style={{ background: '#f4f4f4', padding: '1rem', overflowX: 'auto', color: 'black', borderRadius: '4px' }}>
             {JSON.stringify(response, null, 2)}
           </pre>
         </div>
-      )}
+      ) : null}
     </main>
   );
 }

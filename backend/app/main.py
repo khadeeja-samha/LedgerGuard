@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import contracts
+from app.api import audit
 
 app = FastAPI(title="Ledgerguard Backend")
 
@@ -13,6 +14,7 @@ app.add_middleware(
 )
 
 app.include_router(contracts.router, prefix="/api/contracts", tags=["contracts"])
+app.include_router(audit.router, prefix="/api/audit", tags=["audit"])
 
 
 @app.get("/")
