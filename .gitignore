@@ -1,0 +1,9 @@
+backup_security_audit/
+venv/
+node_modules/
+.env
+.env.local
+.env.*
+*.env
+*.key
+*.pem
