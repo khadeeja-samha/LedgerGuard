@@ -6,3 +6,14 @@ blockchain/deployments/
 blockchain/contracts/*.sol
 blockchain/test/scratch_*/
 .env
+.env.*
+*.env
+.env.local
+.env.development
+.env.production
+.env.test
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
