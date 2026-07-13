@@ -1,107 +1,64 @@
 import logging
 from web3 import Web3
+from app.db.postgres_client import SessionLocal, AgentAction
+from app.agents.user_agent import run_baseline_usage
+from app.agents.attacker_agent import attempt_reentrancy_exploit
 
 logger = logging.getLogger(__name__)
 
-def run_baseline_usage(contract_id: str, deployment_info: dict) -> dict:
+def run_audit_agents(contract_id: str, deployment_info: dict, audit_run_id: str, source_code: str):
     """
-    Executes a baseline sequence of normal user transactions against the deployed contract
-    to verify its functional correctness deterministically, independently of the LLM.
-    
-    This acts as our "false-positive guard". It proves that the normal flow works
-    (deposit -> check -> withdraw -> check) without any AI reasoning involvement.
-    
-    Args:
-        contract_id: SHA-256 hex digest identifying the contract.
-        deployment_info: Dict containing 'address' and 'abi'.
-        
-    Returns:
-        A dict with 'steps' (log of balances) and 'all_correct' (bool).
+    Orchestrates the agent pipeline for a given deployed contract.
+    Writes each step's result to PostgreSQL using the audit_run_id.
     """
-    # Explicitly connect to the local Hardhat node to guarantee network isolation,
-    # matching the environment where the victim is deployed.
-    w3 = Web3(Web3.HTTPProvider('http://127.0.0.1:8545'))
-    
-    if not w3.is_connected():
-        return {
-            "all_correct": False,
-            "error": "Failed to connect to local Hardhat node at http://127.0.0.1:8545",
-            "steps": []
-        }
-        
-    address = deployment_info.get("address")
-    abi = deployment_info.get("abi")
-    
-    if not address or not abi:
-        return {
-            "all_correct": False,
-            "error": "Missing address or ABI in deployment_info",
-            "steps": []
-        }
-        
-    contract = w3.eth.contract(address=address, abi=abi)
-    
-    # We explicitly use accounts[2] as our "normal user". 
-    # accounts[0] = default deployer
-    # accounts[1] = typically the attacker (via ethers.getSigners() in the agent script)
-    # accounts[2] = normal user (this script)
-    # This guarantees state isolation from the GenericAttacker test runs.
-    if len(w3.eth.accounts) <= 2:
-        return {
-            "all_correct": False,
-            "error": "Not enough accounts available on the local node (need at least 3)",
-            "steps": []
-        }
-        
-    user_account = w3.eth.accounts[2]
-    
-    steps = []
-    all_correct = True
+    db = SessionLocal()
     
     try:
-        # Step 0: Check initial balance
-        initial_balance_wei = contract.functions.balances(user_account).call()
-        initial_balance_eth = w3.from_wei(initial_balance_wei, 'ether')
-        steps.append({"step": "initial", "balance_eth": float(initial_balance_eth)})
+        # 1. Run User Agent (Baseline Guard)
+        # MUST RUN BEFORE SEEDING to ensure a pristine state where it withdraws all funds
+        baseline_result = run_baseline_usage(contract_id, deployment_info)
         
-        # Step 1: Deposit 1 ETH
-        deposit_amount_wei = w3.to_wei(1, 'ether')
-        tx_hash = contract.functions.deposit().transact({
-            'from': user_account,
-            'value': deposit_amount_wei
-        })
-        w3.eth.wait_for_transaction_receipt(tx_hash)
+        user_action = AgentAction(
+            audit_run_id=audit_run_id,
+            agent_type="user_agent",
+            action_description="Baseline usage check (deposit -> withdraw)",
+            result=baseline_result,
+            tx_hash=None
+        )
+        db.add(user_action)
+        db.commit()
         
-        # Step 2: Check balance after deposit
-        post_deposit_balance_wei = contract.functions.balances(user_account).call()
-        post_deposit_balance_eth = w3.from_wei(post_deposit_balance_wei, 'ether')
-        steps.append({"step": "post_deposit", "balance_eth": float(post_deposit_balance_eth)})
+        # 2. Explicitly seed the contract with victim funds (accounts[4])
+        # The User Agent leaves the balance at 0. The Attacker Agent needs funds to steal.
+        w3 = Web3(Web3.HTTPProvider('http://127.0.0.1:8545'))
+        contract = w3.eth.contract(address=deployment_info["address"], abi=deployment_info["abi"])
+        victim_account = w3.eth.accounts[4]
+        tx_hash = contract.functions.deposit().transact({'from': victim_account, 'value': w3.to_wei(10, 'ether')})
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
         
-        if post_deposit_balance_wei != (initial_balance_wei + deposit_amount_wei):
-            all_correct = False
-            
-        # Step 3: Withdraw (ALL)
-        tx_hash = contract.functions.withdraw().transact({
-            'from': user_account
-        })
-        w3.eth.wait_for_transaction_receipt(tx_hash)
+        seed_action = AgentAction(
+            audit_run_id=audit_run_id,
+            agent_type="system_seeder",
+            action_description="Seed contract with 10 ETH victim funds",
+            result={"success": True, "amount": "10 ETH"},
+            tx_hash=receipt.transactionHash.hex() if hasattr(receipt, 'transactionHash') else receipt.get('transactionHash', '').hex() if isinstance(receipt.get('transactionHash'), bytes) else str(receipt.get('transactionHash'))
+        )
+        db.add(seed_action)
+        db.commit()
         
-        # Step 4: Check balance after withdraw
-        post_withdraw_balance_wei = contract.functions.balances(user_account).call()
-        post_withdraw_balance_eth = w3.from_wei(post_withdraw_balance_wei, 'ether')
-        steps.append({"step": "post_withdraw", "balance_eth": float(post_withdraw_balance_eth)})
+        # 3. Run Attacker Agent
+        # With funds in place, attempt the reentrancy exploit
+        exploit_result = attempt_reentrancy_exploit(contract_id, deployment_info, source_code)
         
-        if post_withdraw_balance_wei != 0:
-            all_correct = False
-            
-    except Exception as e:
-        return {
-            "all_correct": False,
-            "error": str(e),
-            "steps": steps
-        }
+        attacker_action = AgentAction(
+            audit_run_id=audit_run_id,
+            agent_type="attacker_agent",
+            action_description="Attempt Reentrancy Exploit",
+            result=exploit_result,
+            tx_hash=None
+        )
+        db.add(attacker_action)
+        db.commit()
 
-    return {
-        "all_correct": all_correct,
-        "steps": steps
-    }
+    finally:
+        db.close()
