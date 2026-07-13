@@ -37,8 +37,4 @@ def upload_contract(request: UploadRequest):
         "contract_id": contract_id,
         "audit_run_id": audit_run_id,
         **graph,
-<<<<<<< HEAD
     }
-=======
-    }
->>>>>>> 81b59a06fe5f34041a73f5a97991e4a4320ffc28

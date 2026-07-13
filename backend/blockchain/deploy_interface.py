@@ -45,9 +45,10 @@ def deploy_contract(contract_name: str, source_code: str) -> dict:
     check_node_ready()
 
     # 1. Wipe old contracts and deployments to prevent artifact collision
-    if CONTRACTS_DIR.exists():
-        shutil.rmtree(CONTRACTS_DIR)
     CONTRACTS_DIR.mkdir(parents=True, exist_ok=True)
+    for f in CONTRACTS_DIR.glob("*.sol"):
+        if f.is_file():
+            f.unlink()
     
     deployment_file = DEPLOYMENTS_DIR / f"{contract_name}.json"
     if deployment_file.exists():
@@ -86,8 +87,4 @@ def deploy_contract(contract_name: str, source_code: str) -> dict:
     if not data.get("success") or not data.get("address"):
         raise DeploymentError(f"Deployment JSON missing success flag or address: {data}")
 
-<<<<<<< HEAD
     return data
-=======
-    return data
->>>>>>> 81b59a06fe5f34041a73f5a97991e4a4320ffc28

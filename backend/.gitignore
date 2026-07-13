@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+blockchain/artifacts/
+blockchain/cache/
+blockchain/deployments/
+blockchain/contracts/*.sol
+blockchain/test/scratch_*/
+.env

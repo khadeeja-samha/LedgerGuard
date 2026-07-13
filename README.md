@@ -37,13 +37,31 @@ LedgerGuard is a multi-agent smart contract security auditing platform. It goes 
 * **Hardhat:** 2 tests
 * **Total:** 24 passing tests, verified to run synchronously in a combined suite without cross-contamination or conflicts.
 
+## Phase 3 Status — Complete ✅
+
+1. **Attacker Agent (`app/agents/attacker_agent.py`)**: Uses NVIDIA NIM (meta/llama-3.3-70b-instruct) to dynamically write Mocha exploits against flagged vulnerabilities. The deterministic Hardhat/Mocha test verdicts serve as the sole source of truth for exploit success.
+2. **User Agent (`app/agents/user_agent.py`)**: Deterministic baseline guard that proves a contract is functional via direct `web3.py` interaction (deposit -> check -> withdraw). Runs completely independent of LLMs.
+3. **Orchestrator (`app/agents/orchestrator.py`) & Postgres Integration**: Wires the pipeline end-to-end. Records every agent action to a PostgreSQL `agent_actions` table, keyed by `audit_run_id`.
+4. **New API Endpoints (`app/api/audit.py`)**:
+   - `POST /api/audit/start`: Triggers parsing, Neo4j writes, Hardhat deployment, and Orchestrator execution.
+   - `GET /api/audit/{audit_run_id}/agent-log`: Retrieves ordered `agent_actions` JSON payload.
+5. **Gate Test Results (`tests/test_attacker_agent.py`)**: 
+   - `EXPLOIT_SUCCEEDED` achieved on `vulnerable_bank.sol` (with the Orchestrator seeding victim funds prior to attack).
+   - `results == []` on `safe_bank.sol` (AI bypass correctly triggered since no flagged Neo4j edge exists).
+   - User Agent baseline integrated and passing deterministically on both.
+
+### Known Limitations (Phase 3)
+- `drained_amount` extraction is best-effort regex on LLM-generated Mocha test titles; `exploit_outcome` is the actual, deterministic source of truth.
+- Only the **reentrancy** attack pattern is implemented so far. Flash-loan detection is deferred to Week 4.
+- No live-streaming UI exists yet — the `agent_actions` data is populated in Postgres, but the frontend does not yet consume or display it (Week 4).
+
 ## What Is NOT Yet Built
 
 To remain explicit about current scope, the following hackathon milestones are pending:
-* Attacker/User/Auditor AI Agents (Phase 3)
-* Live agent-log streaming UI (Phase 3-4)
 * Flash-loan attack pattern detection and execution (Phase 4)
-* Risk scoring and NVIDIA NIM LLM explanation layer (Phase 4)
+* Auditor Agent + risk scoring and NVIDIA NIM LLM explanation layer (Phase 4)
+* Live agent-log streaming UI in the frontend (Phase 4)
+* `findings` and `audit_runs` PostgreSQL tables (Phase 4)
 * General UI polish, animations, and theming (Phase 5, deliberately deferred to prioritize core logic)
 
 ## Setup Instructions

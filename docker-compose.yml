@@ -11,5 +11,17 @@ services:
     volumes:
       - neo4j_data:/data
 
+  postgres:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-ledgerguard}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ledgerguard_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-ledgerguard}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
 volumes:
   neo4j_data:
+  postgres_data:

@@ -9,3 +9,6 @@ neo4j
 python-dotenv
 web3
 requests
+openai
+psycopg2-binary
+sqlalchemy
