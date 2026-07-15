@@ -132,6 +132,24 @@ class NeoClient:
                     pairs=edge_params,
                 )
 
+            # Step 6 — USES_MANIPULABLE_PRICE_SOURCE edges
+            price_edge_params = [
+                {"func_name": e["from"], "var_name": e["to"]}
+                for e in edges
+                if e.get("type") == "USES_MANIPULABLE_PRICE_SOURCE"
+            ]
+            if price_edge_params:
+                tx.run(
+                    """
+                    UNWIND $pairs AS p
+                    MATCH (fn:Function {contract_id: $contract_id, name: p.func_name})
+                    MATCH (sv:StateVariable {contract_id: $contract_id, name: p.var_name})
+                    MERGE (fn)-[:USES_MANIPULABLE_PRICE_SOURCE]->(sv)
+                    """,
+                    contract_id=contract_id,
+                    pairs=price_edge_params,
+                )
+
     # ------------------------------------------------------------------
     # Read
     # ------------------------------------------------------------------
@@ -195,11 +213,11 @@ class NeoClient:
             for record in sv_result
         ]
 
-        # Query 3 — Reentrancy edges
+        # Query 3 — Reentrancy and price manipulation edges
         edge_result = tx.run(
             """
             MATCH (fn:Function {contract_id: $contract_id})
-                  -[e:MAKES_EXTERNAL_CALL_BEFORE_STATE_UPDATE]->
+                  -[e:MAKES_EXTERNAL_CALL_BEFORE_STATE_UPDATE|USES_MANIPULABLE_PRICE_SOURCE]->
                   (sv:StateVariable)
             RETURN fn.name AS `from`, sv.name AS `to`, type(e) AS type
             """,

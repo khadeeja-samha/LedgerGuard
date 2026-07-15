@@ -291,6 +291,15 @@ def attempt_flashloan_exploit(
                 })
             elif is_candidate:
                 flagged_funcs.append((func, reasoning))
+                new_edges = [
+                    {
+                        "type": "USES_MANIPULABLE_PRICE_SOURCE",
+                        "from": func_name,
+                        "to": var_name
+                    }
+                    for var_name in sorted(list(overlap))
+                ]
+                neo_client.write_graph(contract_id, {"edges": new_edges})
                 
     if not flagged_funcs:
         return {
@@ -299,8 +308,45 @@ def attempt_flashloan_exploit(
             "summary": "No functions flagged as flash-loan candidates.",
         }
 
-
     for func_info, reasoning in flagged_funcs:
+        # Redeploy the contract for this exploit attempt to avoid state contamination from previous attempts
+        current_deployment_info = deployment_info
+        redeploy_failed = False
+        redeploy_err_msg = ""
+        try:
+            from blockchain.deploy_interface import deploy_contract
+            import re
+            contract_name_match = re.search(r"contract\s+(\w+)", source_code)
+            if contract_name_match:
+                contract_name = contract_name_match.group(1)
+                print(f"Redeploying {contract_name} for function {func_info['name']} exploit run...", flush=True)
+                fresh_deployment_info = deploy_contract(contract_name, source_code)
+                if fresh_deployment_info and fresh_deployment_info.get("success"):
+                    current_deployment_info = fresh_deployment_info
+                else:
+                    redeploy_failed = True
+                    redeploy_err_msg = "Deployment returned unsuccessful status"
+        except Exception as redeploy_err:
+            redeploy_failed = True
+            redeploy_err_msg = str(redeploy_err)
+            print(f"Failed to redeploy contract: {redeploy_err}", flush=True)
+
+        if redeploy_failed:
+            # If redeployment fails, record it as an infrastructure failure instead of silently proceeding with mutated state
+            results.append({
+                "function_name": func_info["name"],
+                "exploit_outcome": "REDEPLOY_FAILED",
+                "reasoning": reasoning,
+                "redeploy_warning": f"Failed to redeploy fresh contract state: {redeploy_err_msg}",
+                "attempts": [
+                    {
+                        "script_error": f"Failed to redeploy fresh contract state: {redeploy_err_msg}",
+                        "exploit_outcome": "SCRIPT_ERROR",
+                    }
+                ]
+            })
+            continue
+
         # We pass reasoning in via the edges param (which is unused by flashloan prompt builder except to pass it)
         # Or better, we just pass reasoning in edges dict.
         edges = [{"type": "LLM_FLASHLOAN_REASONING", "reasoning": reasoning}]
@@ -308,7 +354,7 @@ def attempt_flashloan_exploit(
             func_name=func_info["name"],
             func_info=func_info,
             edges=edges,
-            deployment_info=deployment_info,
+            deployment_info=current_deployment_info,
             source_code=source_code,
             nim_client=nim_client,
             attack_type="flashloan"
@@ -683,10 +729,14 @@ def _run_single_exploit(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     reasoning=True,
-                    max_tokens=4096,
+                    max_tokens=12288,
                 )
             except Exception as e:
-                attempt_log["script_error"] = f"LLM generation failed: {str(e)}"
+                err_msg = str(e)
+                if "truncated due to max_tokens" in err_msg or "truncated" in err_msg:
+                    attempt_log["script_error"] = "LLM response truncated due to max_tokens limit — script incomplete"
+                else:
+                    attempt_log["script_error"] = f"LLM generation failed: {err_msg}"
                 result["attempts"].append(attempt_log)
                 continue
 
