@@ -6,6 +6,7 @@ from app.models.schemas import UploadRequest
 from app.parser.solidity_parser import parse_solidity, SolidityParseError
 from app.parser.graph_builder import build_graph
 from app.db.neo4j_client import NeoClient
+from app.utils import compute_contract_id
 
 router = APIRouter()
 
@@ -14,8 +15,7 @@ _neo_client = NeoClient()
 
 def _derive_contract_id(source_code: str) -> str:
     """Derive a stable contract_id from the normalized source code."""
-    normalized = source_code.strip().replace("\r\n", "\n")
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return compute_contract_id(source_code)
 
 
 @router.post("/upload")

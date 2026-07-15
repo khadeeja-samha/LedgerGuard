@@ -2,6 +2,7 @@ import pytest
 import hashlib
 from pathlib import Path
 from app.parser.solidity_parser import parse_solidity
+from app.utils import compute_contract_id
 from app.parser.graph_builder import build_graph
 from app.db.neo4j_client import NeoClient
 from blockchain.deploy_interface import deploy_contract
@@ -18,7 +19,7 @@ def test_attacker_exploits_vulnerable_contract(hardhat_node):
     source_code = (FIXTURES_DIR / "vulnerable_bank.sol").read_text()
     
     # 1. Parse and write graph
-    contract_id = hashlib.sha256(source_code.encode("utf-8")).hexdigest()
+    contract_id = compute_contract_id(source_code)
     ast = parse_solidity(source_code)
     graph = build_graph(ast, source_code.encode("utf-8"))
     
@@ -77,7 +78,7 @@ def test_attacker_fails_against_safe_contract(hardhat_node):
     source_code = (FIXTURES_DIR / "safe_bank.sol").read_text()
     
     # 1. Parse and write graph
-    contract_id = hashlib.sha256(source_code.encode("utf-8")).hexdigest()
+    contract_id = compute_contract_id(source_code)
     ast = parse_solidity(source_code)
     graph = build_graph(ast, source_code.encode("utf-8"))
     

@@ -12,6 +12,7 @@ import pytest
 from app.db.neo4j_client import NeoClient
 from app.parser.solidity_parser import parse_solidity
 from app.parser.graph_builder import build_graph
+from app.utils import compute_contract_id
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -23,8 +24,7 @@ def _load_fixture(filename: str) -> str:
 
 
 def _derive_contract_id(source_code: str) -> str:
-    normalized = source_code.strip().replace("\r\n", "\n")
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return compute_contract_id(source_code)
 
 
 @pytest.fixture(scope="module")

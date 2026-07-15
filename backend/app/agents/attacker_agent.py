@@ -105,6 +105,26 @@ contract GenericAttacker {
 }
 """
 
+GENERIC_FLASH_BORROWER_SOURCE = """// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract GenericFlashBorrower {
+    address public target;
+    bytes public attackPayload;
+    
+    function setup(address _target, bytes memory _attackPayload) external {
+        target = _target;
+        attackPayload = _attackPayload;
+    }
+    
+    function executeAttack() external payable {
+        (bool success, ) = target.call{value: msg.value}(attackPayload);
+        require(success, "Attack call failed");
+    }
+    
+    receive() external payable {}
+}
+"""
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -173,6 +193,135 @@ def attempt_reentrancy_exploit(
     }
 
 
+
+def _check_flashloan_semantics_with_llm(nim_client: NimClient, func_name: str, reads: list[str], writes: list[str], source_code: str) -> tuple[bool | None, str]:
+    system_prompt = (
+        "You are a strict security classification filter. Your job is to analyze ONE SPECIFIC Solidity function "
+        "and answer YES or NO to a single question.\n\n"
+        "QUESTION: Does THIS SPECIFIC function's logic depend on a price, exchange rate, or reserve ratio "
+        "computed from mutable on-chain state, where that value could be skewed by a preceding "
+        "transaction in the same block?\n\n"
+        "CRITICAL RULES:\n"
+        "1. You MUST ONLY evaluate the function named in the prompt.\n"
+        "2. DO NOT evaluate other functions in the contract, even if they are vulnerable.\n"
+        "3. If the specific function requested does NOT compute or use a price/ratio itself, you MUST return false.\n"
+        "4. Respond strictly with a JSON object in this format:\n"
+        "{\"is_price_dependent\": true/false, \"reasoning\": \"1-2 sentences why\"}"
+    )
+    user_prompt = (
+        f"Function to Analyze: {func_name}\n"
+        f"Reads: {reads}\n"
+        f"Writes: {writes}\n"
+        f"Source code:\n{source_code}\n\n"
+        "Does this function's logic depend on a price, exchange rate, or reserve ratio computed from mutable on-chain state, where that value could be skewed by a preceding transaction in the same block?\n"
+        "Respond in JSON only."
+    )
+    
+    for attempt in range(1, 4):
+        try:
+            response = nim_client.generate(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                reasoning=False
+            )
+            print(f"NIM classification attempt {attempt} response: {response}")
+            
+            # The base Llama model is heavily tuned to output <think>...</think>.
+            # Even when we override max_reasoning_tokens to 0, the chat template
+            # sometimes bleeds a literal `</think>` tag into the output text.
+            # Assuming the model won't legitimately output `</think>` inside its JSON reasoning.
+            # If it does, .split() will eat the first part of the JSON, causing a JSONDecodeError
+            # below, which is safely caught by our 3-attempt retry loop.
+            clean_response = response.split("</think>")[-1].strip()
+            # Strip markdown if present
+            if clean_response.startswith("```json"):
+                clean_response = clean_response[7:]
+            elif clean_response.startswith("```"):
+                clean_response = clean_response[3:]
+            if clean_response.endswith("```"):
+                clean_response = clean_response[:-3]
+            clean_response = clean_response.strip()
+            
+            try:
+                data = json.loads(clean_response)
+                return data.get("is_price_dependent", False), data.get("reasoning", "Parsed successfully")
+            except json.JSONDecodeError as parse_err:
+                print(f"JSON decode error on attempt {attempt}: {parse_err}")
+                continue # loop to retry
+                
+        except Exception as e:
+            print(f"API/Network error on attempt {attempt}: {e}")
+            continue # loop to retry
+            
+    # If all 3 retries exhaust, return None so it is explicitly inconclusive, not False
+    return None, "classification_inconclusive"
+
+def attempt_flashloan_exploit(
+    contract_id: str,
+    deployment_info: dict,
+    source_code: str,
+) -> dict:
+    neo_client = NeoClient()
+    graph = neo_client.read_graph(contract_id)
+    nim_client = NimClient()
+    
+    flagged_funcs = []
+    results = []
+    
+    for func in graph.get("functions", []):
+        func_name = func["name"]
+        if func.get("visibility", "internal") not in ("public", "external"):
+            continue
+            
+        reads = func.get("reads", [])
+        writes = func.get("writes", [])
+        overlap = set(reads) & set(writes)
+        
+        if overlap:
+            print(f"Checking semantics for {func_name}...", flush=True)
+            is_candidate, reasoning = _check_flashloan_semantics_with_llm(nim_client, func_name, reads, writes, source_code)
+            print(f"Result for {func_name}: {is_candidate}", flush=True)
+            
+            if is_candidate is None:
+                # Retries exhausted, record inconclusive failure without attempting exploit
+                results.append({
+                    "function_name": func_name,
+                    "exploit_outcome": "CLASSIFICATION_INCONCLUSIVE",
+                    "reasoning": reasoning
+                })
+            elif is_candidate:
+                flagged_funcs.append((func, reasoning))
+                
+    if not flagged_funcs:
+        return {
+            "contract_id": contract_id,
+            "results": results,
+            "summary": "No functions flagged as flash-loan candidates.",
+        }
+
+
+    for func_info, reasoning in flagged_funcs:
+        # We pass reasoning in via the edges param (which is unused by flashloan prompt builder except to pass it)
+        # Or better, we just pass reasoning in edges dict.
+        edges = [{"type": "LLM_FLASHLOAN_REASONING", "reasoning": reasoning}]
+        result = _run_single_exploit(
+            func_name=func_info["name"],
+            func_info=func_info,
+            edges=edges,
+            deployment_info=deployment_info,
+            source_code=source_code,
+            nim_client=nim_client,
+            attack_type="flashloan"
+        )
+        # Attach the LLM reasoning to the output
+        result["classification_reasoning"] = reasoning
+        results.append(result)
+
+    return {
+        "contract_id": contract_id,
+        "results": results,
+    }
+
 # ---------------------------------------------------------------------------
 # Prompt Construction
 # ---------------------------------------------------------------------------
@@ -236,6 +385,9 @@ def _build_exploit_prompt(
         "- Interface: `new ethers.Interface(abi)` (Do NOT use ethers.utils.Interface)\n"
         "- Parsing Ether: `ethers.parseEther(\"1.0\")` (Do NOT use ethers.utils.parseEther)\n"
         "- Getting Balance: `await ethers.provider.getBalance(address)`\n"
+        "- Variables: Use `let`, not `const`, for any variable reassigned later in the script.\n"
+        "- BigNumber: Do NOT use `ethers.BigNumber.from()`. It is removed in v6. Use native BigInt (e.g., `1000n` or `ethers.parseEther(\"1000\")`).\n"
+        "- Math/Comparisons: Do NOT use `.gt()`, `.lt()`, `.add()`, `.sub()`, `.mul()`, `.div()`, or `.eq()`. Use native BigInt operators: `>`, `<`, `+`, `-`, `*`, `/`, `==`. Example: `if (finalBalance > initialBalance)`\n"
     )
 
     user_prompt = (
@@ -268,6 +420,82 @@ def _build_exploit_prompt(
 
     return system_prompt, user_prompt
 
+
+
+def _build_flashloan_exploit_prompt(
+    func_name: str,
+    func_info: dict,
+    edges: list[dict],
+    deployment_info: dict,
+    source_code: str,
+) -> tuple[str, str]:
+    contract_address = deployment_info.get("address", "UNKNOWN")
+    abi_json = json.dumps(deployment_info.get("abi", []), indent=2)
+    
+    reasoning = edges[0]["reasoning"] if edges and "reasoning" in edges[0] else "Dependent on mutable on-chain state"
+    
+    system_prompt = (
+        "You are a smart contract security researcher specializing in "
+        "flash-loan and price-manipulation exploits. You write Hardhat/Mocha test scripts that "
+        "attempt to exploit vulnerable Solidity contracts deployed on a "
+        "local Hardhat node.\n\n"
+        "CRITICAL RULES:\n"
+        "1. Produce exactly ONE describe() block with exactly ONE it() test case.\n"
+        "2. The single it() test must assert whether the attacker successfully "
+        "drained the vast majority of funds from the victim contract. A PASSING test "
+        "means the exploit SUCCEEDED. Because minor rounding or division precision issues can "
+        "leave a small dust balance in the victim contract, you MUST assert that the victim contract's "
+        "final balance has decreased by at least 90% (or is less than 10% of its initial balance), "
+        "rather than checking if it is exactly 0. A FAILING test "
+        "means the exploit was BLOCKED.\n"
+        "3. Do NOT include multiple test cases, setup tests, or cleanup tests.\n"
+        "4. You MUST start the file with exactly these imports:\n"
+        "   const { ethers } = require('hardhat');\n"
+        "   const { expect } = require('chai');\n"
+        "5. A pre-compiled generic helper contract named 'GenericFlashBorrower' "
+        "is already available in the environment. You MUST NOT write or compile "
+        "inline Solidity code.\n"
+        "6. Do NOT import or require 'fs', 'child_process', 'net', 'http', "
+        "'os', 'path'. Do NOT use eval(), Function(), or process.env.\n"
+        "7. Output ONLY the complete JavaScript test file content. No markdown "
+        "fences, no explanations, no comments outside the code.\n"
+        "8. The victim contract is already deployed at the address provided. "
+        "Connect to it using ethers and the ABI provided.\n"
+        "9. You MUST follow the explicit manipulation and attack sequence "
+        "provided in the prompt.\n\n"
+        "CRITICAL ETHERS v6 API REFERENCE:\n"
+        "This project uses Ethers v6. You MUST use v6 syntax. Common v5-to-v6 changes:\n"
+        "- Deployment: `const c = await factory.deploy(); await c.waitForDeployment();` (Do NOT use .deployed())\n"
+        "- Contract Address: `await c.getAddress()` (Do NOT use c.address)\n"
+        "- Interface: `new ethers.Interface(abi)` (Do NOT use ethers.utils.Interface)\n"
+        "- Parsing Ether: `ethers.parseEther(\"1.0\")` (Do NOT use ethers.utils.parseEther)\n"
+        "- Getting Balance: `await ethers.provider.getBalance(address)`\n"
+        "- Variables: Use `let`, not `const`, for any variable reassigned later in the script.\n"
+        "- BigNumber: Do NOT use `ethers.BigNumber.from()`. It is removed in v6. Use native BigInt (e.g., `1000n` or `ethers.parseEther(\"1000\")`).\n"
+        "- Math/Comparisons: Do NOT use `.gt()`, `.lt()`, `.add()`, `.sub()`, `.mul()`, `.div()`, or `.eq()`. Use native BigInt operators: `>`, `<`, `+`, `-`, `*`, `/`, `==`. Example: `if (finalBalance > initialBalance)`\n"
+    )
+
+    user_prompt = (
+        f"## Exploit Target\n\n"
+        f"**Vulnerable function:** `{func_name}`\n"
+        f"**Vulnerability Reasoning:** {reasoning}\n\n"
+        f"**Deployed contract address:** `{contract_address}`\n\n"
+        f"**Contract ABI:**\n```json\n{abi_json}\n```\n\n"
+        f"**Full Solidity source code:**\n```solidity\n{source_code}\n```\n\n"
+        f"Write a Hardhat/Mocha test script (.cjs format) that proves this vulnerability "
+        f"by exploiting the price manipulation flaw. Your test must execute the following sequence:\n"
+        f"1. Manipulate the price: call the pool's swap/deposit functions with a very large amount "
+        f"of ETH (e.g. 1000 ETH) from one of the signer accounts to heavily skew the reserve ratio/spot price.\n"
+        f"2. Trigger the exploit: call `{func_name}` (using a different signer if needed, or the same one) "
+        f"which will execute at the heavily manipulated price.\n"
+        f"3. Reverse the manipulation (optional if needed to realize profit).\n"
+        f"4. Assert that the attacker made a profit (e.g. final ETH balance is greater than initial balance, "
+        f"or the contract was drained).\n\n"
+        f"Remember: exactly ONE describe() block, exactly ONE it() test case. "
+        f"A passing test = exploit succeeded = vulnerability confirmed."
+    )
+
+    return system_prompt, user_prompt
 
 # ---------------------------------------------------------------------------
 # Dangerous Import Scanner (HARD GATE)
@@ -359,6 +587,7 @@ def _run_single_exploit(
     deployment_info: dict,
     source_code: str,
     nim_client: NimClient,
+    attack_type: str = "reentrancy",
 ) -> dict:
     """Orchestrate a single exploit attempt for one flagged function.
 
@@ -373,9 +602,7 @@ def _run_single_exploit(
         exploit_outcome, exploit_succeeded, drained_amount,
         raw_test_output, script_error.
     """
-    scratch_id = str(uuid.uuid4())
-    scratch_dir = TEST_DIR / f"scratch_{scratch_id}"
-    script_path = scratch_dir / "exploit.cjs"
+    created_scratch_dirs = []
 
     # Default result — SCRIPT_ERROR is the safe default
     result = {
@@ -387,160 +614,243 @@ def _run_single_exploit(
         "raw_test_output": "",
         "script_content": "",
         "script_error": None,
+        "attempts": []
     }
 
     try:
-        # --- Step 0: Write GenericAttacker helper ---
+        # --- Step 0: Write helper contract ---
         helpers_dir = BLOCKCHAIN_DIR / "contracts" / "helpers"
         helpers_dir.mkdir(parents=True, exist_ok=True)
-        attacker_path = helpers_dir / "GenericAttacker.sol"
-        attacker_path.write_text(GENERIC_ATTACKER_SOURCE, encoding="utf-8")
+        if attack_type == "flashloan":
+            helper_path = helpers_dir / "GenericFlashBorrower.sol"
+            helper_path.write_text(GENERIC_FLASH_BORROWER_SOURCE, encoding="utf-8")
+        else:
+            helper_path = helpers_dir / "GenericAttacker.sol"
+            helper_path.write_text(GENERIC_ATTACKER_SOURCE, encoding="utf-8")
 
-        # --- Step 1: Generate exploit script via LLM ---
-        system_prompt, user_prompt = _build_exploit_prompt(
-            func_name=func_name,
-            func_info=func_info,
-            edges=edges,
-            deployment_info=deployment_info,
-            source_code=source_code,
-        )
+        for attempt_num in range(1, 4):
+            scratch_id = str(uuid.uuid4())
+            scratch_dir = TEST_DIR / f"scratch_{scratch_id}"
+            script_path = scratch_dir / "exploit.cjs"
+            created_scratch_dirs.append(scratch_dir)
 
-        try:
-            llm_response = nim_client.generate(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                reasoning=True,
-                max_tokens=12288,
-            )
-        except Exception as e:
-            result["script_error"] = f"LLM generation failed: {str(e)}"
-            return result
+            attempt_log = {
+                "attempt": attempt_num,
+                "exploit_outcome": SCRIPT_ERROR,
+                "script_error": None,
+                "raw_test_output": "",
+                "script_content": ""
+            }
 
-        # --- Step 2: Extract JS code from response ---
-        script_content = _extract_js_code(llm_response)
-        result["script_content"] = script_content
-
-        if not script_content or len(script_content.strip()) < 20:
-            result["script_error"] = (
-                "LLM returned empty or too-short script content."
-            )
-            return result
-
-        # --- Step 3: HARD GATE — dangerous import scan ---
-        scan_error = _scan_for_dangerous_imports(script_content)
-        if scan_error is not None:
-            result["script_error"] = scan_error
-            return result
-
-        # --- Step 4: Write script to scratch directory ---
-        scratch_dir.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(script_content, encoding="utf-8")
-
-        # --- Step 5: Build safe environment (strip secrets) ---
-        safe_env = os.environ.copy()
-        for var in _STRIPPED_ENV_VARS:
-            safe_env.pop(var, None)
-
-        # --- Step 6: Execute via subprocess ---
-        npx_cmd = "npx.cmd" if os.name == "nt" else "npx"
-        # Path relative to BLOCKCHAIN_DIR for Hardhat
-        relative_script = script_path.relative_to(BLOCKCHAIN_DIR)
-
-        result["exploit_attempted"] = True
-
-        try:
-            proc = subprocess.run(
-                [
-                    npx_cmd, "hardhat",
-                    "--config", EXPLOIT_CONFIG,
-                    "--network", "localhost",
-                    "test", str(relative_script),
-                ],
-                cwd=str(BLOCKCHAIN_DIR),
-                env=safe_env,
-                capture_output=True,
-                text=True,
-                timeout=_SUBPROCESS_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired as e:
-            result["raw_test_output"] = (e.stdout or "") + (e.stderr or "")
-            result["script_error"] = (
-                f"Subprocess timed out after {_SUBPROCESS_TIMEOUT} seconds."
-            )
-            return result
-
-        # Capture full output for debugging
-        result["raw_test_output"] = (
-            f"--- STDOUT ---\n{proc.stdout}\n"
-            f"--- STDERR ---\n{proc.stderr}\n"
-            f"--- EXIT CODE: {proc.returncode} ---"
-        )
-
-        # --- Step 7: Parse Mocha JSON and classify outcome ---
-        mocha_json = _parse_mocha_json(proc.stdout)
-
-        if mocha_json is None:
-            # No valid Mocha JSON → SCRIPT_ERROR
-            result["script_error"] = (
-                "Mocha did not produce valid JSON output. "
-                "The generated script likely has syntax errors or "
-                "failed to load."
-            )
-            return result
-
-        stats = mocha_json.get("stats", {})
-        passes = stats.get("passes", 0)
-        failures = stats.get("failures", 0)
-
-        if passes > 0 and failures == 0:
-            # All tests passed → exploit drained funds
-            result["exploit_outcome"] = EXPLOIT_SUCCEEDED
-            result["exploit_succeeded"] = True
-            # Try to extract drained amount from test output if available
-            result["drained_amount"] = _extract_drained_amount(mocha_json)
-
-        elif failures > 0:
-            # We must distinguish between genuine assertion failures (the contract
-            # blocked the exploit) and script crashes (TypeError, etc.)
-            genuine_assertion_failure = False
-            for test in stats.get("failures", []) if isinstance(stats.get("failures"), list) else mocha_json.get("failures", []):
-                err = test.get("err", {})
-                err_message = err.get("message", "").lower()
-                err_name = err.get("name", "").lower()
-                # Chai AssertionError often has name "AssertionError" or message like "expected"
-                if "assertionerror" in err_name or "expected " in err_message:
-                    genuine_assertion_failure = True
-                    break
-
-            if genuine_assertion_failure:
-                # Tests ran but assertions failed → exploit was genuinely blocked
-                result["exploit_outcome"] = EXPLOIT_BLOCKED
-                result["exploit_succeeded"] = False
+            # --- Step 1: Generate exploit script via LLM ---
+            if attack_type == "flashloan":
+                system_prompt, user_prompt = _build_flashloan_exploit_prompt(
+                    func_name, func_info, edges, deployment_info, source_code
+                )
             else:
-                # The script crashed before finishing the test logic
-                result["exploit_outcome"] = SCRIPT_ERROR
-                result["script_error"] = (
-                    "The generated test crashed with a runtime error instead of "
-                    "failing an assertion. The exploit logic did not complete."
+                system_prompt, user_prompt = _build_exploit_prompt(
+                    func_name=func_name,
+                    func_info=func_info,
+                    edges=edges,
+                    deployment_info=deployment_info,
+                    source_code=source_code,
                 )
 
-        else:
-            # 0 passes AND 0 failures → no tests actually ran
-            result["exploit_outcome"] = SCRIPT_ERROR
-            result["script_error"] = (
-                "Mocha found no tests to run (0 passes, 0 failures). "
-                "The generated script likely has an empty describe() block."
+            # If this is a retry, append the previous attempt's error to the prompt
+            if attempt_num > 1 and result["attempts"]:
+                last_error = result["attempts"][-1].get("script_error")
+                last_script = result["attempts"][-1].get("script_content")
+                if last_error:
+                    injection = (
+                        f"\n\n**CRITICAL FIX REQUIRED:**\n"
+                        f"Your previous attempt failed with the following error:\n"
+                        f"```\n{last_error}\n```\n"
+                    )
+                    if last_script:
+                        injection += (
+                            f"\nHere is the script you generated that caused the error:\n"
+                            f"```javascript\n{last_script}\n```\n"
+                        )
+                    injection += "\nYou MUST fix this specific issue in your new script."
+                    print("========== INJECTED RETRY PROMPT ==========")
+                    print(injection)
+                    print("===========================================")
+                    user_prompt += injection
+
+            try:
+                print(f"Generating exploit script via LLM (Attempt {attempt_num})...", flush=True)
+                llm_response = nim_client.generate(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    reasoning=True,
+                    max_tokens=4096,
+                )
+            except Exception as e:
+                attempt_log["script_error"] = f"LLM generation failed: {str(e)}"
+                result["attempts"].append(attempt_log)
+                continue
+
+            # --- Step 2: Extract JS code from response ---
+            script_content = _extract_js_code(llm_response)
+            attempt_log["script_content"] = script_content
+
+            if not script_content or len(script_content.strip()) < 20:
+                attempt_log["script_error"] = (
+                    "LLM returned empty or too-short script content."
+                )
+                result["attempts"].append(attempt_log)
+                continue
+
+            # --- Step 3: HARD GATE — dangerous import scan ---
+            scan_error = _scan_for_dangerous_imports(script_content)
+            if scan_error is not None:
+                attempt_log["script_error"] = scan_error
+                result["attempts"].append(attempt_log)
+                continue
+
+            # --- Step 4: Write script to scratch directory ---
+            scratch_dir.mkdir(parents=True, exist_ok=True)
+            script_path.write_text(script_content, encoding="utf-8")
+
+            # --- Step 5: Build safe environment (strip secrets) ---
+            safe_env = os.environ.copy()
+            for var in _STRIPPED_ENV_VARS:
+                safe_env.pop(var, None)
+
+            # --- Step 6: Execute via subprocess ---
+            npx_cmd = "npx.cmd" if os.name == "nt" else "npx"
+            # Path relative to BLOCKCHAIN_DIR for Hardhat
+            relative_script = script_path.relative_to(BLOCKCHAIN_DIR)
+
+            result["exploit_attempted"] = True
+
+            try:
+                print(f"Executing exploit script via Hardhat (Attempt {attempt_num})...", flush=True)
+                proc = subprocess.run(
+                    [
+                        npx_cmd, "hardhat",
+                        "--config", EXPLOIT_CONFIG,
+                        "--network", "localhost",
+                        "test", str(relative_script),
+                    ],
+                    cwd=str(BLOCKCHAIN_DIR),
+                    env=safe_env,
+                    capture_output=True,
+                    text=True,
+                    timeout=_SUBPROCESS_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired as e:
+                attempt_log["raw_test_output"] = (e.stdout or "") + (e.stderr or "")
+                attempt_log["script_error"] = (
+                    f"Subprocess timed out after {_SUBPROCESS_TIMEOUT} seconds."
+                )
+                result["attempts"].append(attempt_log)
+                continue
+            except OSError as e:
+                attempt_log["raw_test_output"] = f"[ENVIRONMENT_ERROR] Failed to start Hardhat test toolchain: {str(e)}"
+                attempt_log["script_error"] = f"ENVIRONMENT_ERROR: {str(e)}"
+                attempt_log["exploit_outcome"] = SCRIPT_ERROR
+                result["attempts"].append(attempt_log)
+                # Environment errors (like missing npx) won't be fixed by retrying the LLM script. Break immediately.
+                break
+
+            # Capture full output for debugging
+            attempt_log["raw_test_output"] = (
+                f"--- STDOUT ---\n{proc.stdout}\n"
+                f"--- STDERR ---\n{proc.stderr}\n"
+                f"--- EXIT CODE: {proc.returncode} ---"
             )
+
+            # --- Step 7: Parse Mocha JSON and classify outcome ---
+            mocha_json = _parse_mocha_json(proc.stdout)
+
+            if mocha_json is None:
+                # No valid Mocha JSON → SCRIPT_ERROR
+                attempt_log["script_error"] = (
+                    "Mocha did not produce valid JSON output. "
+                    "The generated script likely has syntax errors or "
+                    "failed to load."
+                )
+                result["attempts"].append(attempt_log)
+                continue
+
+            stats = mocha_json.get("stats", {})
+            passes = stats.get("passes", 0)
+            failures = stats.get("failures", 0)
+
+            if passes > 0 and failures == 0:
+                # All tests passed → exploit drained funds
+                attempt_log["exploit_outcome"] = EXPLOIT_SUCCEEDED
+                result["exploit_succeeded"] = True
+                # Try to extract drained amount from test output if available
+                result["drained_amount"] = _extract_drained_amount(mocha_json)
+                result["attempts"].append(attempt_log)
+                break
+
+            elif failures > 0:
+                # We must distinguish between genuine assertion failures (the contract
+                # blocked the exploit) and script crashes (TypeError, etc.)
+                genuine_assertion_failure = False
+                for test in stats.get("failures", []) if isinstance(stats.get("failures"), list) else mocha_json.get("failures", []):
+                    err = test.get("err", {})
+                    err_message = err.get("message", "").lower()
+                    err_name = err.get("name", "").lower()
+                    # Chai AssertionError or on-chain revert acting as contract defense
+                    if (
+                        "assertionerror" in err_name 
+                        or "expected " in err_message
+                        or "reverted with reason string" in err_message
+                        or "reverted with custom error" in err_message
+                        or "reverted with panic code" in err_message
+                    ):
+                        genuine_assertion_failure = True
+                        break
+
+                if genuine_assertion_failure:
+                    # Tests ran but assertions failed → exploit was genuinely blocked
+                    attempt_log["exploit_outcome"] = EXPLOIT_BLOCKED
+                    attempt_log["script_error"] = f"AssertionError: {err_message}"
+                    result["exploit_succeeded"] = False
+                    result["attempts"].append(attempt_log)
+                    break
+                else:
+                    # The script crashed before finishing the test logic
+                    attempt_log["exploit_outcome"] = SCRIPT_ERROR
+                    attempt_log["script_error"] = (
+                        "The generated test crashed with a runtime error instead of "
+                        "failing an assertion. The exploit logic did not complete."
+                    )
+                    result["attempts"].append(attempt_log)
+                    continue
+
+            else:
+                # 0 passes AND 0 failures → no tests actually ran
+                attempt_log["exploit_outcome"] = SCRIPT_ERROR
+                attempt_log["script_error"] = (
+                    "Mocha found no tests to run (0 passes, 0 failures). "
+                    "The generated script likely has an empty describe() block."
+                )
+                result["attempts"].append(attempt_log)
+                continue
+
+        # After the loop, update final `result` from the last `attempt_log`
+        last_attempt = result["attempts"][-1] if result["attempts"] else None
+        if last_attempt:
+            result["exploit_outcome"] = last_attempt["exploit_outcome"]
+            result["script_error"] = last_attempt["script_error"]
+            result["raw_test_output"] = last_attempt["raw_test_output"]
+            result["script_content"] = last_attempt["script_content"]
 
         return result
 
     finally:
-        # ALWAYS clean up scratch directory
-        if scratch_dir.exists():
-            try:
-                shutil.rmtree(scratch_dir)
-            except OSError:
-                pass  # Best-effort cleanup
+        # ALWAYS clean up scratch directories
+        for d in created_scratch_dirs:
+            if d.exists():
+                try:
+                    shutil.rmtree(d)
+                except OSError:
+                    pass  # Best-effort cleanup
 
 
 # ---------------------------------------------------------------------------

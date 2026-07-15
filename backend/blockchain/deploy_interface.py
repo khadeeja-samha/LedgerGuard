@@ -4,7 +4,10 @@ import json
 import shutil
 import requests
 import subprocess
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 class NodeNotReadyError(Exception):
     pass
@@ -73,7 +76,15 @@ def deploy_contract(contract_name: str, source_code: str) -> dict:
             text=True
         )
     except subprocess.CalledProcessError as e:
-        raise DeploymentError(f"Deployment failed with exit code {e.returncode}.\nStdout:\n{e.stdout}\nStderr:\n{e.stderr}")
+        # Ignore the Windows Node.js UV_HANDLE_CLOSING assertion crash if the JSON output was successfully written
+        if e.returncode == 3221226505 and deployment_file.exists():
+            logger.warning(
+                f"Ignoring Windows Node.js assertion exit code 3221226505. "
+                f"Deployment JSON found. Process output:\n"
+                f"Stdout:\n{e.stdout}\nStderr:\n{e.stderr}"
+            )
+        else:
+            raise DeploymentError(f"Deployment failed with exit code {e.returncode}.\nStdout:\n{e.stdout}\nStderr:\n{e.stderr}")
 
     # 4. Verify and return output
     if not deployment_file.exists():

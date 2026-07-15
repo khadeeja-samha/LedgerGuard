@@ -55,6 +55,17 @@ def run_baseline_usage(contract_id: str, deployment_info: dict) -> dict:
         
     user_account = w3.eth.accounts[2]
     
+    # Check if the contract supports deposit/withdraw (e.g. Bank contracts vs AMMs)
+    has_deposit = any(f.get("name") == "deposit" for f in abi if f.get("type") == "function")
+    has_withdraw = any(f.get("name") == "withdraw" for f in abi if f.get("type") == "function")
+    
+    if not (has_deposit and has_withdraw):
+        logger.info(f"Contract {address} does not support deposit/withdraw. Skipping baseline usage.")
+        return {
+            "all_correct": True,
+            "steps": [{"step": "skipped", "reason": "No deposit/withdraw functions in ABI"}]
+        }
+
     steps = []
     all_correct = True
     

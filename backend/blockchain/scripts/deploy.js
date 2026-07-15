@@ -18,8 +18,12 @@ async function main() {
     // Ensure it's compiled
     await hre.run("compile");
 
+    const artifact = await hre.artifacts.readArtifact(contractName);
+    const isPayable = artifact.abi.some(item => item.type === 'constructor' && item.stateMutability === 'payable');
+    const overrides = isPayable ? { value: hre.ethers.parseEther("10") } : {};
+    
     const ContractFactory = await hre.ethers.getContractFactory(contractName);
-    const contract = await ContractFactory.deploy();
+    const contract = await ContractFactory.deploy(overrides);
     
     // Wait for the deployment to finish
     await contract.waitForDeployment();
@@ -36,7 +40,6 @@ async function main() {
     }
 
     // Prepare JSON output
-    const artifact = await hre.artifacts.readArtifact(contractName);
     const output = {
       success: true,
       address: address,

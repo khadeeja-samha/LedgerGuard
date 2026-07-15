@@ -1,22 +1,19 @@
-"""
-Audit routes — matches PRD §10 layout:
-  GET /api/audit/{contract_id}/graph
-  GET /api/audit/{contract_id}/findings    (Week 4 stub)
-  GET /api/audit/{contract_id}/agent-log   (Week 4 stub)
-"""
-
+import datetime
 import hashlib
+import logging
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.neo4j_client import NeoClient
-from app.db.postgres_client import get_db, AgentAction
+from app.db.postgres_client import get_db, AgentAction, AuditRun
 from app.models.schemas import UploadRequest
 from app.parser.solidity_parser import parse_solidity, SolidityParseError
 from app.parser.graph_builder import build_graph
 from blockchain.deploy_interface import deploy_contract
 from app.agents.orchestrator import run_audit_agents
+from app.utils import compute_contract_id
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _neo_client = NeoClient()
@@ -46,31 +43,58 @@ def start_audit(request: UploadRequest, db: Session = Depends(get_db)):
     except SolidityParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    graph = build_graph(tree, source_code.encode("utf-8"))
-
     # Derive contract_id identically to contracts.py
-    normalized = source_code.strip().replace("\r\n", "\n")
-    contract_id = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    contract_id = compute_contract_id(source_code)
     
     # Generate fresh audit_run_id
     audit_run_id = str(uuid.uuid4())
 
-    # Write graph to Neo4j
-    _neo_client.write_graph(contract_id, graph)
+    # Create audit run record in postgres as "running"
+    audit_run = AuditRun(
+        id=audit_run_id,
+        contract_id=contract_id,
+        status="running",
+        started_at=datetime.datetime.utcnow()
+    )
+    db.add(audit_run)
+    db.commit()
 
-    # Extract the contract name using regex (find the last defined contract)
-    import re
-    matches = re.findall(r'contract\s+([a-zA-Z0-9_]+)', source_code)
-    if not matches:
-        raise HTTPException(status_code=400, detail="No contract found in source code")
-    contract_name = matches[-1]
+    try:
+        graph = build_graph(tree, source_code.encode("utf-8"))
 
-    deployment_info = deploy_contract(contract_name, source_code)
-    if not deployment_info.get("success"):
-        raise HTTPException(status_code=500, detail=f"Deployment failed: {deployment_info.get('error')}")
+        # Write graph to Neo4j
+        _neo_client.write_graph(contract_id, graph)
 
-    # Run orchestrator
-    run_audit_agents(contract_id, deployment_info, audit_run_id, source_code)
+        # Extract the contract name using regex (find the last defined contract)
+        import re
+        matches = re.findall(r'contract\s+([a-zA-Z0-9_]+)', source_code)
+        if not matches:
+            raise HTTPException(status_code=400, detail="No contract found in source code")
+        contract_name = matches[-1]
+
+        deployment_info = deploy_contract(contract_name, source_code)
+        if not deployment_info.get("success"):
+            raise HTTPException(status_code=500, detail=f"Deployment failed: {deployment_info.get('error')}")
+
+        # Run orchestrator
+        run_audit_agents(contract_id, deployment_info, audit_run_id, source_code)
+
+        # Update status to "completed"
+        audit_run.status = "completed"
+        audit_run.completed_at = datetime.datetime.utcnow()
+        db.commit()
+
+    except Exception as exc:
+        logger.exception(f"Audit run {audit_run_id} failed with exception")
+        # Update status to "failed"
+        audit_run.status = "failed"
+        audit_run.completed_at = datetime.datetime.utcnow()
+        db.commit()
+        # If it is already an HTTPException, reraise it
+        if isinstance(exc, HTTPException):
+            raise exc
+        # Otherwise raise 500
+        raise HTTPException(status_code=500, detail=str(exc))
 
     return {
         "contract_id": contract_id,
@@ -78,10 +102,17 @@ def start_audit(request: UploadRequest, db: Session = Depends(get_db)):
         "status": "completed"
     }
 
+
 @router.get("/{audit_run_id}/agent-log")
 def get_audit_agent_log(audit_run_id: str, db: Session = Depends(get_db)):
     """Return the ordered list of agent_actions for a given audit_run_id."""
-    actions = db.query(AgentAction).filter(AgentAction.audit_run_id == audit_run_id).order_by(AgentAction.timestamp).all()
+    actions = (
+        db.query(AgentAction)
+        .join(AuditRun, AgentAction.audit_run_id == AuditRun.id)
+        .filter(AuditRun.id == audit_run_id)
+        .order_by(AgentAction.timestamp)
+        .all()
+    )
     return [
         {
             "id": a.id,
@@ -94,3 +125,4 @@ def get_audit_agent_log(audit_run_id: str, db: Session = Depends(get_db)):
         }
         for a in actions
     ]
+

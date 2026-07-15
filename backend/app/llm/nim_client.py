@@ -49,7 +49,8 @@ class NimClient:
                     extra_body={
                         "chat_template_kwargs": {"enable_thinking": reasoning},
                         "reasoning_budget": 8192 if reasoning else 0
-                    }
+                    },
+                    timeout=90.0
                 )
                 
                 finish_reason = response.choices[0].finish_reason
