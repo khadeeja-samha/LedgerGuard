@@ -3,7 +3,7 @@ __pycache__/
 blockchain/artifacts/
 blockchain/cache/
 blockchain/deployments/
-blockchain/contracts/*.sol
+
 blockchain/test/scratch_*/
 .env
 .env.*
