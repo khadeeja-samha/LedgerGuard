@@ -1,16 +1,14 @@
-from app.agents.flashloan_exploit_runner import (
-    run_flashloan_collateral_exploit,
-    deploy_pool_contract,
-)
+from pathlib import Path
+from blockchain.deploy_interface import deploy_contract
+from app.agents.flashloan_exploit_runner import run_flashloan_collateral_exploit
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 def test_exploit_succeeds_against_vulnerable_lending_pool(hardhat_node):
-    """
-    LendingPoolAttacker manipulates MockLendingPoolVulnerable's internal
-    reserve-derived price during a flash loan callback, then borrows
-    against artificially deflated collateral requirements.
-    """
-    deploy_pool_contract("MockLendingPoolVulnerable")
+    source_code = (FIXTURES_DIR / "mock_lending_pool_vulnerable.sol").read_text()
+    deployment_info = deploy_contract("MockLendingPoolVulnerable", source_code)
+    assert deployment_info["success"] is True, "Deployment failed"
 
     result = run_flashloan_collateral_exploit("MockLendingPoolVulnerable")
 
@@ -24,12 +22,9 @@ def test_exploit_succeeds_against_vulnerable_lending_pool(hardhat_node):
 
 
 def test_exploit_blocked_against_safe_lending_pool(hardhat_node):
-    """
-    MockLendingPoolSafe uses a fixed oraclePrice, immune to reserve
-    manipulation during the flash loan window — same attacker contract
-    should fail to gain any discount here.
-    """
-    deploy_pool_contract("MockLendingPoolSafe")
+    source_code = (FIXTURES_DIR / "mock_lending_pool_safe.sol").read_text()
+    deployment_info = deploy_contract("MockLendingPoolSafe", source_code)
+    assert deployment_info["success"] is True, "Deployment failed"
 
     result = run_flashloan_collateral_exploit("MockLendingPoolSafe")
 
