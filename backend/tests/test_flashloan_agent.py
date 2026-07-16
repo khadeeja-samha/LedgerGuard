@@ -70,3 +70,64 @@ def test_flashloan_fails_against_safe_pool(hardhat_node):
     # If it DOES proceed to exploit execution, the outcome MUST be EXPLOIT_BLOCKED.
     if claim_reward_result is not None:
         assert claim_reward_result["exploit_outcome"] == "EXPLOIT_BLOCKED"
+
+
+def test_flashloan_exploits_vulnerable_lending_pool(hardhat_node):
+    """
+    Test that the flashloan attacker agent successfully exploits the vulnerable lending pool.
+    """
+    source_code = (FIXTURES_DIR / "mock_lending_pool_vulnerable.sol").read_text()
+    
+    # 1. Parse and write graph
+    contract_id = compute_contract_id(source_code)
+    ast = parse_solidity(source_code)
+    graph = build_graph(ast, source_code.encode("utf-8"))
+    
+    neo_client = NeoClient()
+    neo_client.write_graph(contract_id, graph)
+    
+    # 2. Deploy contract
+    deployment_info = deploy_contract("MockLendingPoolVulnerable", source_code)
+    assert deployment_info["success"] is True, "Deployment failed"
+    
+    # 3. Run the flash loan exploit attempt
+    result = attempt_flashloan_exploit(contract_id, deployment_info, source_code)
+    
+    # Find borrowAgainstCollateral in the results
+    borrow_result = None
+    for r in result.get("results", []):
+        if r["function_name"] == "borrowAgainstCollateral":
+            borrow_result = r
+            break
+            
+    assert borrow_result is not None, "borrowAgainstCollateral was not flagged by the LLM filter!"
+    assert borrow_result["exploit_outcome"] == "EXPLOIT_SUCCEEDED"
+
+
+def test_flashloan_fails_against_safe_lending_pool(hardhat_node):
+    """
+    Test that the flashloan attacker agent either filters out or fails to exploit the safe lending pool.
+    """
+    source_code = (FIXTURES_DIR / "mock_lending_pool_safe.sol").read_text()
+    
+    contract_id = compute_contract_id(source_code)
+    ast = parse_solidity(source_code)
+    graph = build_graph(ast, source_code.encode("utf-8"))
+    
+    neo_client = NeoClient()
+    neo_client.write_graph(contract_id, graph)
+    
+    deployment_info = deploy_contract("MockLendingPoolSafe", source_code)
+    assert deployment_info["success"] is True, "Deployment failed"
+    
+    result = attempt_flashloan_exploit(contract_id, deployment_info, source_code)
+    
+    # Check borrowAgainstCollateral result
+    borrow_result = None
+    for r in result.get("results", []):
+        if r["function_name"] == "borrowAgainstCollateral":
+            borrow_result = r
+            break
+            
+    if borrow_result is not None:
+        assert borrow_result["exploit_outcome"] == "EXPLOIT_BLOCKED"

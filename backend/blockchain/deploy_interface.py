@@ -68,6 +68,12 @@ def deploy_contract(contract_name: str, source_code: str) -> dict:
     npx_cmd = "npx.cmd" if os.name == "nt" else "npx"
     try:
         subprocess.run(
+            [npx_cmd, "hardhat", "clean"],
+            cwd=str(BLOCKCHAIN_DIR),
+            check=False,
+            capture_output=True
+        )
+        subprocess.run(
             [npx_cmd, "hardhat", "run", "scripts/deploy.js", "--network", "localhost"],
             cwd=str(BLOCKCHAIN_DIR),
             env=env,

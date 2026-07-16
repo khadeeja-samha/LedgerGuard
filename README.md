@@ -55,13 +55,17 @@ LedgerGuard is a multi-agent smart contract security auditing platform. It goes 
 - Only the **reentrancy** attack pattern is implemented so far. Flash-loan detection is deferred to Week 4.
 - No live-streaming UI exists yet — the `agent_actions` data is populated in Postgres, but the frontend does not yet consume or display it (Week 4).
 
+## Week 4 Status — Complete ✅
+
+* **Flash-loan attack pattern detection and execution:** Integrated LLM semantic classification for price-dependency check and mocha execution to prove flash-loan vulnerabilities.
+* **`findings` and `audit_runs` PostgreSQL tables:** Successfully added model schemas, database migrations, and auto-backfill logic.
+* **Architectural Note:** Reentrancy candidate-detection is based on a deterministic Neo4j graph edge mapping, while flash-loan candidate-detection utilizes an LLM semantic classifier (`_check_flashloan_semantics_with_llm`) paired with real Mocha execution as the sole pass/fail source of truth. Both approaches keep exploit SUCCESS/FAILURE verification fully deterministic; only candidate SELECTION differs by attack type. This is a deliberate architectural choice to handle the semantic variability of price feeds compared to the structural nature of reentrancy call patterns.
+
 ## What Is NOT Yet Built
 
 To remain explicit about current scope, the following hackathon milestones are pending:
-* Flash-loan attack pattern detection and execution (Phase 4)
 * Auditor Agent + risk scoring and NVIDIA NIM LLM explanation layer (Phase 4)
 * Live agent-log streaming UI in the frontend (Phase 4)
-* `findings` and `audit_runs` PostgreSQL tables (Phase 4)
 * General UI polish, animations, and theming (Phase 5, deliberately deferred to prioritize core logic)
 
 ## Setup Instructions

