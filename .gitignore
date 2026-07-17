@@ -12,3 +12,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Hardhat dynamic deployments
+backend/blockchain/cache/
+backend/blockchain/artifacts/
+backend/blockchain/deployments/
+backend/blockchain/cache_deploy/
+backend/blockchain/artifacts_deploy/
+backend/blockchain/contracts_deploy/

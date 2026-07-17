@@ -66,7 +66,7 @@ LedgerGuard is a multi-agent smart contract security auditing platform. It goes 
 ### Known Limitations (Week 4)
 
 1. **Callback-based Flash Loans Deferred**: The lending-pool-style flash-loan pattern (borrow-based, requiring an explicit `IFlashLoanReceiver` callback interface) is a known limitation. The LLM cannot reliably use the pre-compiled receiver primitive, frequently attempting to dynamically compile inline Solidity instead. This pattern is deferred from the fully automated gate test suite, while standard AMM/reserve-based flash loans (e.g. `vulnerable_pool.sol`) are fully supported and proven.
-2. **Transient Deployment Race Conditions**: Rapid sequential deployment of contracts via Hardhat on Windows occasionally causes filesystem/cache race conditions (`HH700: Artifact not found`). We mitigated this by manually wiping `artifacts/` via `shutil` instead of `npx hardhat clean`, which resolved the issue for the final gate tests.
+2. **Path-Isolated Deployments**: The background Hardhat node intercepts RPC requests and auto-compiles changes in the default `contracts/` directory. To prevent a file-locking race condition on Windows where both the background node and the foreground deploy script attempt to compile and wipe `artifacts/` simultaneously, dynamic contract deployments are strictly isolated. The `deploy_interface.py` orchestrator writes to a dedicated `contracts_deploy/` directory and overrides Hardhat's environment paths (`HARDHAT_SOURCES`, `HARDHAT_ARTIFACTS`) for the foreground script, rendering it completely invisible to the background node watcher.
 
 ## What Is NOT Yet Built
 

@@ -17,6 +17,7 @@ class DeploymentError(Exception):
 
 BLOCKCHAIN_DIR = Path(__file__).parent
 CONTRACTS_DIR = BLOCKCHAIN_DIR / "contracts"
+CONTRACTS_DEPLOY_DIR = BLOCKCHAIN_DIR / "contracts_deploy"
 DEPLOYMENTS_DIR = BLOCKCHAIN_DIR / "deployments"
 RPC_URL = "http://127.0.0.1:8545"
 
@@ -47,31 +48,30 @@ def deploy_contract(contract_name: str, source_code: str) -> dict:
     """
     check_node_ready()
 
-    # 1. Wipe old contracts and deployments to prevent artifact collision
-    CONTRACTS_DIR.mkdir(parents=True, exist_ok=True)
-    for f in CONTRACTS_DIR.glob("*.sol"):
-        if f.is_file():
-            f.unlink()
+    # 1. Wipe old isolated deploy directory to prevent artifact collision
+    if CONTRACTS_DEPLOY_DIR.exists():
+        shutil.rmtree(CONTRACTS_DEPLOY_DIR, ignore_errors=True)
+    CONTRACTS_DEPLOY_DIR.mkdir(parents=True, exist_ok=True)
     
+    # Copy static helpers into isolated directory so they are compiled alongside dynamic contract
+    helpers_src = CONTRACTS_DIR / "helpers"
+    if helpers_src.exists():
+        shutil.copytree(helpers_src, CONTRACTS_DEPLOY_DIR / "helpers")
+
     deployment_file = DEPLOYMENTS_DIR / f"{contract_name}.json"
     if deployment_file.exists():
         deployment_file.unlink()
 
     # 2. Write new source
-    contract_path = CONTRACTS_DIR / f"{contract_name}.sol"
+    contract_path = CONTRACTS_DEPLOY_DIR / f"{contract_name}.sol"
     contract_path.write_text(source_code)
 
-    # 3. Clean cache and artifacts manually instead of hardhat clean to avoid Windows locking/race conditions
-    artifacts_dir = BLOCKCHAIN_DIR / "artifacts"
-    cache_dir = BLOCKCHAIN_DIR / "cache"
-    if artifacts_dir.exists():
-        shutil.rmtree(artifacts_dir, ignore_errors=True)
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir, ignore_errors=True)
-
-    # 4. Compile and Deploy via Hardhat
+    # 3. Compile and Deploy via Hardhat
     env = os.environ.copy()
     env["CONTRACT_NAME"] = contract_name
+    env["HARDHAT_SOURCES"] = "./contracts_deploy"
+    env["HARDHAT_ARTIFACTS"] = "./artifacts_deploy"
+    env["HARDHAT_CACHE"] = "./cache_deploy"
 
     npx_cmd = "npx.cmd" if os.name == "nt" else "npx"
     try:

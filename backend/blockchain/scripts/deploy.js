@@ -16,7 +16,7 @@ async function main() {
   try {
     console.log(`Deploying ${contractName}...`);
     // Ensure it's compiled
-    await hre.run("compile");
+    await hre.run("compile", { force: true });
 
     const artifact = await hre.artifacts.readArtifact(contractName);
     const isPayable = artifact.abi.some(item => item.type === 'constructor' && item.stateMutability === 'payable');
