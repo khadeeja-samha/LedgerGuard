@@ -147,3 +147,7 @@ Ledgerguard/
 ├── docker-compose.yml    # Neo4j database configuration
 └── README.md
 ```
+
+## Known Limitations
+
+- **Audit Status Tracking:** Currently, the `POST /api/audit/start` endpoint is synchronous and blocks until the audit finishes. If a user reloads the frontend page or navigates directly to an `audit_run_id` URL without going through the start flow, there is no way to re-fetch the run's status since there is no `GET /status` endpoint available. This is acceptable for the hackathon demo flow but should be addressed in the future.
