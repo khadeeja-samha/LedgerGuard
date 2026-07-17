@@ -49,18 +49,14 @@ def start_audit(request: UploadRequest, db: Session = Depends(get_db)):
     Trigger the full pipeline end-to-end: parse → Neo4j write → Hardhat deploy → orchestrator
     """
     source_code = request.source_code
-    try:
-        tree = parse_solidity(source_code)
-    except SolidityParseError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
+    
     # Derive contract_id identically to contracts.py
     contract_id = compute_contract_id(source_code)
     
     # Generate fresh audit_run_id
     audit_run_id = str(uuid.uuid4())
 
-    # Create audit run record in postgres as "running"
+    # Create audit run record in postgres as "running" BEFORE anything else
     audit_run = AuditRun(
         id=audit_run_id,
         contract_id=contract_id,
@@ -71,6 +67,12 @@ def start_audit(request: UploadRequest, db: Session = Depends(get_db)):
     db.commit()
 
     try:
+        # Parse solidity
+        try:
+            tree = parse_solidity(source_code)
+        except SolidityParseError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
         graph = build_graph(tree, source_code.encode("utf-8"))
 
         # Write graph to Neo4j
@@ -90,17 +92,40 @@ def start_audit(request: UploadRequest, db: Session = Depends(get_db)):
         # Run orchestrator
         run_audit_agents(contract_id, deployment_info, audit_run_id, source_code)
 
-        # Update status to "completed"
-        audit_run.status = "completed"
-        audit_run.completed_at = datetime.datetime.utcnow()
+        # Update status to "completed" using an explicit update query to avoid detached instance issues
+        db.query(AuditRun).filter(AuditRun.id == audit_run_id).update({
+            "status": "completed",
+            "completed_at": datetime.datetime.utcnow()
+        })
         db.commit()
 
     except Exception as exc:
         logger.exception(f"Audit run {audit_run_id} failed with exception")
-        # Update status to "failed"
-        audit_run.status = "failed"
-        audit_run.completed_at = datetime.datetime.utcnow()
-        db.commit()
+        
+        # Use a fresh DB session for cleanup to prevent errors if outer `db` connection timed out
+        from app.db.postgres_client import SessionLocal
+        cleanup_db = SessionLocal()
+        try:
+            cleanup_db.query(AuditRun).filter(AuditRun.id == audit_run_id).update({
+                "status": "failed",
+                "completed_at": datetime.datetime.utcnow()
+            })
+            
+            # Log the error in agent_actions table so it is visible in the DB
+            error_action = AgentAction(
+                audit_run_id=audit_run_id,
+                agent_type="system_error",
+                action_description=f"Pipeline failed: {type(exc).__name__}",
+                result={"error": str(exc)},
+                tx_hash=None
+            )
+            cleanup_db.add(error_action)
+            cleanup_db.commit()
+        except Exception as inner_exc:
+            logger.error(f"Failed to update audit run status to failed: {inner_exc}")
+        finally:
+            cleanup_db.close()
+            
         # If it is already an HTTPException, reraise it
         if isinstance(exc, HTTPException):
             raise exc
