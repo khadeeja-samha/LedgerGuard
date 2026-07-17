@@ -87,6 +87,7 @@ def generate_findings(audit_run_id: str, contract_id: str) -> list[dict]:
 
     nim_client = NimClient()
     findings = []
+    seen_findings = set()
     
     for edge in flagged_edges:
         func_name = edge.get("from")
@@ -97,6 +98,12 @@ def generate_findings(audit_run_id: str, contract_id: str) -> list[dict]:
             
         # Determine attack_type deterministically based on edge_type first
         attack_type, _, _ = _compute_deterministic_risk(edge_type, "MISSING_LOG")
+        
+        # Deduplicate to prevent multiple findings for the same function and attack type
+        finding_key = (func_name, attack_type)
+        if finding_key in seen_findings:
+            continue
+        seen_findings.add(finding_key)
         
         # Look up outcome
         exploit_outcome = action_map.get((func_name, attack_type))

@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.neo4j_client import NeoClient
-from app.db.postgres_client import get_db, AgentAction, AuditRun
+from app.db.postgres_client import get_db, AgentAction, AuditRun, Finding
 from app.models.schemas import UploadRequest
 from app.parser.solidity_parser import parse_solidity, SolidityParseError
 from app.parser.graph_builder import build_graph
@@ -26,10 +26,21 @@ def get_audit_graph(contract_id: str):
     return graph
 
 
-@router.get("/{contract_id}/findings")
-def get_audit_findings(contract_id: str):
-    """Week 4 stub — will return LLM-generated findings."""
-    return []
+@router.get("/{audit_run_id}/findings")
+def get_audit_findings(audit_run_id: str, db: Session = Depends(get_db)):
+    """Return the LLM-generated findings for a given audit_run_id."""
+    findings = db.query(Finding).filter(Finding.audit_run_id == audit_run_id).all()
+    return [
+        {
+            "id": f.id,
+            "function_name": f.function_name,
+            "risk_level": f.risk_level,
+            "risk_score": f.risk_score,
+            "description": f.description,
+            "attack_type": f.attack_type
+        }
+        for f in findings
+    ]
 
 
 @router.post("/start")

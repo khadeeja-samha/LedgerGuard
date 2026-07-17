@@ -95,6 +95,9 @@ LedgerGuard is a multi-agent smart contract security auditing platform. It goes 
 5. **Known limitation — transient full-suite deployment race condition:** Running
    `pytest tests/ -v` as one combined
 
+6. **Known limitation — lending-pool-style flash-loan pattern is not reliably auditable yet:**
+   The lending-pool-style flash-loan pattern (borrow-based, requiring an explicit `IFlashLoanReceiver` callback interface) is not yet reliably auditable by the current LLM-driven Attacker Agent. The LLM repeatedly attempts to dynamically compile inline Solidity receiver logic instead of orchestrating the provided pre-compiled generic helper via JavaScript, despite explicit prompt instructions. We are consciously descoping this specific sub-pattern from the automated gate test. Conversely, the AMM/reserve-based flash-loan pattern (e.g., `vulnerable_pool.sol`) which does not require a callback interface IS fully proven, stable, and remains in scope. This is a deliberate, documented boundary for the current Hackathon phase.
+
 ## What Is NOT Yet Built
 
 To remain explicit about current scope, the following hackathon milestones are pending:

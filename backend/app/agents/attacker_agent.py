@@ -500,7 +500,12 @@ def _build_flashloan_exploit_prompt(
         "   const { expect } = require('chai');\n"
         "5. A pre-compiled generic helper contract named 'GenericFlashBorrower' "
         "is already available in the environment. You MUST NOT write or compile "
-        "inline Solidity code.\n"
+        "inline Solidity code. Instead, to execute a flash loan, use this exact pattern:\n"
+        "   const factory = await ethers.getContractFactory('GenericFlashBorrower');\n"
+        "   const borrower = await factory.deploy(poolAddress);\n"
+        "   await borrower.waitForDeployment();\n"
+        "   // The 'data' payload is sent directly to the pool to trigger the exploit callback\n"
+        "   await borrower.executeFlashLoan(poolAddress, flashLoanAmount, data);\n"
         "6. Do NOT import or require 'fs', 'child_process', 'net', 'http', "
         "'os', 'path'. Do NOT use eval(), Function(), or process.env.\n"
         "7. Output ONLY the complete JavaScript test file content. No markdown "
@@ -530,13 +535,18 @@ def _build_flashloan_exploit_prompt(
         f"**Full Solidity source code:**\n```solidity\n{source_code}\n```\n\n"
         f"Write a Hardhat/Mocha test script (.cjs format) that proves this vulnerability "
         f"by exploiting the price manipulation flaw. Your test must execute the following sequence:\n"
-        f"1. Manipulate the price: call the pool's swap/deposit functions with a very large amount "
-        f"of ETH (e.g. 1000 ETH) from one of the signer accounts to heavily skew the reserve ratio/spot price.\n"
+        f"1. Manipulate the price: compute a manipulation amount as a percentage (e.g. 5-20%) of the "
+        f"contract's current on-chain reserve balance. Do NOT use an arbitrary absolute number. "
+        f"Call the pool's swap/deposit functions with this amount to skew the reserve ratio/spot price.\n"
         f"2. Trigger the exploit: call `{func_name}` (using a different signer if needed, or the same one) "
         f"which will execute at the heavily manipulated price.\n"
         f"3. Reverse the manipulation (optional if needed to realize profit).\n"
-        f"4. Assert that the attacker made a profit (e.g. final ETH balance is greater than initial balance, "
-        f"or the contract was drained).\n\n"
+        f"4. Assert that the attacker made a net profit. Specifically, check that the attacker's final ETH balance "
+        f"is greater than their initial ETH balance. **CRITICAL: You MUST account for gas costs.** "
+        f"Do NOT just check `finalBalance > initialBalance` because gas spent on the attack transactions will reduce the final balance. "
+        f"Instead, track the exact ETH used for gas (`receipt.gasUsed * receipt.gasPrice`) and add it to the final balance, or assert that the final balance is greater than `initialBalance - (expected max gas cost)`. "
+        f"Do NOT use `receipt.effectiveGasPrice`, it does not exist in Ethers v6. Use `receipt.gasPrice` instead. "
+        f"Do NOT assert that the victim contract is completely drained, as price manipulation often only extracts partial value.\n\n"
         f"Remember: exactly ONE describe() block, exactly ONE it() test case. "
         f"A passing test = exploit succeeded = vulnerability confirmed."
     )
@@ -841,17 +851,22 @@ def _run_single_exploit(
                 # We must distinguish between genuine assertion failures (the contract
                 # blocked the exploit) and script crashes (TypeError, etc.)
                 genuine_assertion_failure = False
+                panic_error = None
                 for test in stats.get("failures", []) if isinstance(stats.get("failures"), list) else mocha_json.get("failures", []):
                     err = test.get("err", {})
                     err_message = err.get("message", "").lower()
                     err_name = err.get("name", "").lower()
+                    
+                    if "reverted with panic code" in err_message:
+                        panic_error = err_message
+                        continue
+
                     # Chai AssertionError or on-chain revert acting as contract defense
                     if (
                         "assertionerror" in err_name 
                         or "expected " in err_message
                         or "reverted with reason string" in err_message
                         or "reverted with custom error" in err_message
-                        or "reverted with panic code" in err_message
                     ):
                         genuine_assertion_failure = True
                         break
@@ -864,12 +879,15 @@ def _run_single_exploit(
                     result["attempts"].append(attempt_log)
                     break
                 else:
-                    # The script crashed before finishing the test logic
+                    # The script crashed before finishing the test logic, or hit a Solidity panic
                     attempt_log["exploit_outcome"] = SCRIPT_ERROR
-                    attempt_log["script_error"] = (
-                        "The generated test crashed with a runtime error instead of "
-                        "failing an assertion. The exploit logic did not complete."
-                    )
+                    if panic_error:
+                        attempt_log["script_error"] = f"Solidity Panic: {panic_error}"
+                    else:
+                        attempt_log["script_error"] = (
+                            "The generated test crashed with a runtime error instead of "
+                            "failing an assertion. The exploit logic did not complete."
+                        )
                     result["attempts"].append(attempt_log)
                     continue
 

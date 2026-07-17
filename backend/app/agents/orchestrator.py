@@ -1,8 +1,9 @@
 import logging
 from web3 import Web3
-from app.db.postgres_client import SessionLocal, AgentAction
+from app.db.postgres_client import SessionLocal, AgentAction, Finding
 from app.agents.user_agent import run_baseline_usage
 from app.agents.attacker_agent import attempt_reentrancy_exploit, attempt_flashloan_exploit
+from app.agents.auditor_agent import generate_findings
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,20 @@ def run_audit_agents(contract_id: str, deployment_info: dict, audit_run_id: str,
             tx_hash=None
         )
         db.add(flashloan_action)
+        db.commit()
+
+        # 5. Run Auditor Agent
+        raw_findings = generate_findings(audit_run_id, contract_id)
+        for f in raw_findings:
+            finding_row = Finding(
+                audit_run_id=audit_run_id,
+                function_name=f["function_name"],
+                risk_level=f["risk_level"],
+                risk_score=f["risk_score"],
+                description=f["description"],
+                attack_type=f["attack_type"]
+            )
+            db.add(finding_row)
         db.commit()
 
     finally:
