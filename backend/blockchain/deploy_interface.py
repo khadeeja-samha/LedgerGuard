@@ -61,18 +61,20 @@ def deploy_contract(contract_name: str, source_code: str) -> dict:
     contract_path = CONTRACTS_DIR / f"{contract_name}.sol"
     contract_path.write_text(source_code)
 
-    # 3. Compile and Deploy via Hardhat
+    # 3. Clean cache and artifacts manually instead of hardhat clean to avoid Windows locking/race conditions
+    artifacts_dir = BLOCKCHAIN_DIR / "artifacts"
+    cache_dir = BLOCKCHAIN_DIR / "cache"
+    if artifacts_dir.exists():
+        shutil.rmtree(artifacts_dir, ignore_errors=True)
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+    # 4. Compile and Deploy via Hardhat
     env = os.environ.copy()
     env["CONTRACT_NAME"] = contract_name
 
     npx_cmd = "npx.cmd" if os.name == "nt" else "npx"
     try:
-        subprocess.run(
-            [npx_cmd, "hardhat", "clean"],
-            cwd=str(BLOCKCHAIN_DIR),
-            check=False,
-            capture_output=True
-        )
         subprocess.run(
             [npx_cmd, "hardhat", "run", "scripts/deploy.js", "--network", "localhost"],
             cwd=str(BLOCKCHAIN_DIR),
