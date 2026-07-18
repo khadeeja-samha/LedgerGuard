@@ -10,6 +10,31 @@ export default function GraphViewer({ contractId }: { contractId: string }) {
   const [graphData, setGraphData] = useState<{ nodes: any[]; links: any[] } | null>(null);
   const [error, setError] = useState('');
   const [selectedNode, setSelectedNode] = useState<any>(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const containerRef = useCallback((node: HTMLDivElement | null) => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
+    if (node) {
+      setDimensions({
+        width: node.clientWidth,
+        height: node.clientHeight
+      });
+      
+      const observer = new ResizeObserver((entries) => {
+        if (entries[0]) {
+          setDimensions({
+            width: entries[0].contentRect.width,
+            height: entries[0].contentRect.height
+          });
+        }
+      });
+      observer.observe(node);
+      observerRef.current = observer;
+    }
+  }, []);
 
   useEffect(() => {
     const fetchGraph = async () => {
@@ -96,10 +121,13 @@ export default function GraphViewer({ contractId }: { contractId: string }) {
   return (
     <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', border: '1px solid #ccc', borderRadius: '8px', overflow: 'hidden' }}>
       {/* Main Graph View */}
-      <div style={{ flex: 1, height: '600px', backgroundColor: '#fafafa' }}>
-        <ForceGraph2D
-          graphData={graphData}
-          nodeLabel="label"
+      <div ref={containerRef} style={{ flex: 1, height: '600px', backgroundColor: '#fafafa', overflow: 'hidden' }}>
+        {dimensions.width > 0 && dimensions.height > 0 && (
+          <ForceGraph2D
+            width={dimensions.width}
+            height={dimensions.height}
+            graphData={graphData}
+            nodeLabel="label"
           nodeColor={(node) => {
             if (node.group === 'Function') return '#4f46e5'; // Indigo
             if (node.group === 'StateVariable') return '#10b981'; // Emerald
@@ -112,6 +140,7 @@ export default function GraphViewer({ contractId }: { contractId: string }) {
           linkWidth={(link) => (link.color === 'red' ? 3 : 1)}
           onNodeClick={(node) => setSelectedNode(node)}
         />
+        )}
       </div>
 
       {/* Side Panel for Click-to-Inspect */}
