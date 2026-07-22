@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import GraphViewer from './components/GraphViewer';
 import FindingsReport from './components/FindingsReport';
-// import AgentLogView from './components/AgentLogView';
+import AgentLogView from './components/AgentLogView';
 
 export default function Home() {
   const [sourceCode, setSourceCode] = useState('');
