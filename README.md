@@ -68,12 +68,18 @@ LedgerGuard is a multi-agent smart contract security auditing platform. It goes 
 1. **Callback-based Flash Loans Deferred**: The lending-pool-style flash-loan pattern (borrow-based, requiring an explicit `IFlashLoanReceiver` callback interface) is a known limitation. The LLM cannot reliably use the pre-compiled receiver primitive, frequently attempting to dynamically compile inline Solidity instead. This pattern is deferred from the fully automated gate test suite, while standard AMM/reserve-based flash loans (e.g. `vulnerable_pool.sol`) are fully supported and proven.
 2. **Path-Isolated Deployments**: The background Hardhat node intercepts RPC requests and auto-compiles changes in the default `contracts/` directory. To prevent a file-locking race condition on Windows where both the background node and the foreground deploy script attempt to compile and wipe `artifacts/` simultaneously, dynamic contract deployments are strictly isolated. The `deploy_interface.py` orchestrator writes to a dedicated `contracts_deploy/` directory and overrides Hardhat's environment paths (`HARDHAT_SOURCES`, `HARDHAT_ARTIFACTS`) for the foreground script, rendering it completely invisible to the background node watcher.
 
+## Week 5 Status — Complete ✅
+
+* **Design & UI**: Fully applied the custom design system, resulting in a premium, polished aesthetic.
+* **GraphViewer**: Fixed graph layout integration, correctly isolating it within the content canvas.
+* **Async Pipeline**: Transitioned the core audit pipeline to fully asynchronous execution. Real-time status updates properly cycle between `queued`, `running`, and `completed` states.
+* **Concurrency-Safe**: Secured the shared Hardhat node and deployment filesystem via a global `pipeline_lock`. Isolation verified through real DB concurrency stress tests.
+* **Navigation**: Cleaned up the app routing, refining the sidebar and top navigation to the single, fully functional "Findings" flow.
+
 ## What Is NOT Yet Built
 
 To remain explicit about current scope, the following hackathon milestones are pending:
-* Auditor Agent + risk scoring and NVIDIA NIM LLM explanation layer (Phase 4)
-* Live agent-log streaming UI in the frontend (Phase 4)
-* General UI polish, animations, and theming (Phase 5, deliberately deferred to prioritize core logic)
+* Live agent-log streaming UI in the frontend (Phase 5, partially deferred but groundwork laid)
 
 ## Setup Instructions
 
@@ -150,4 +156,5 @@ Ledgerguard/
 
 ## Known Limitations
 
-- **Audit Status Tracking:** Currently, the `POST /api/audit/start` endpoint is synchronous and blocks until the audit finishes. If a user reloads the frontend page or navigates directly to an `audit_run_id` URL without going through the start flow, there is no way to re-fetch the run's status since there is no `GET /status` endpoint available. This is acceptable for the hackathon demo flow but should be addressed in the future.
+- **Async Pipeline Concurrency:** The `POST /api/audit/start` endpoint kicks off the audit pipeline asynchronously. Because the local Hardhat node accounts and filesystem deployment directories are shared, we introduced a global `threading.Lock` across the pipeline. If multiple audits are initiated concurrently (e.g. double-clicking "Run Audit"), the API returns instantly and queues the background tasks sequentially to prevent nonce collisions and filesystem race conditions. The frontend seamlessly handles this by distinguishing between `queued` and `running` states via polling the new `GET /api/audit/{audit_run_id}/status` endpoint.
+- **Genuine Live Agent Streaming:** The `AgentLogView` component correctly polls `GET /api/audit/{audit_run_id}/agent-log` while the backend runs, streaming agent actions in true real-time, matching our updated architectural goals for Phase 5.

@@ -13,7 +13,7 @@ type Finding = {
 
 type FindingsReportProps = {
   auditRunId: string;
-  status: string; // 'running', 'completed', 'failed'
+  status: string;
 };
 
 const formatAttackType = (type: string) => {
@@ -25,15 +25,6 @@ const formatAttackType = (type: string) => {
     'logic': 'Logic Error',
   };
   return mapping[type] || type;
-};
-
-const getRiskColor = (level: string) => {
-  switch (level.toUpperCase()) {
-    case 'HIGH': return { bg: 'rgba(239, 68, 68, 0.1)', text: '#ef4444', border: '#ef4444' }; // Red
-    case 'UNKNOWN': return { bg: 'rgba(245, 158, 11, 0.1)', text: '#f59e0b', border: '#f59e0b' }; // Amber
-    case 'LOW': return { bg: 'rgba(16, 185, 129, 0.1)', text: '#10b981', border: '#10b981' }; // Green
-    default: return { bg: 'rgba(107, 114, 128, 0.1)', text: '#9ca3af', border: '#6b7280' }; // Gray
-  }
 };
 
 export default function FindingsReport({ auditRunId, status }: FindingsReportProps) {
@@ -61,123 +52,127 @@ export default function FindingsReport({ auditRunId, status }: FindingsReportPro
     }
   }, [auditRunId, status]);
 
-  const containerStyle: React.CSSProperties = {
-    background: '#051424',
-    color: '#d4e4fa',
-    fontFamily: 'Inter, sans-serif',
-    padding: '24px',
-    borderRadius: '8px',
-    border: '1px solid #1e293b',
-    marginTop: '16px',
-  };
-
-  // 1. In-flight POST /api/audit/start (status == 'running')
-  if (status === 'running') {
-    return (
-      <div style={containerStyle}>
-        <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-          <h2 style={{ fontSize: '24px', fontWeight: 600, margin: '0 0 8px 0' }}>Audit in Progress</h2>
-          <div style={{ background: '#0d1c2d', height: '8px', borderRadius: '4px', overflow: 'hidden', margin: '0 auto', maxWidth: '400px' }}>
-            <div style={{ width: '65%', height: '100%', background: '#3b82f6', transition: 'width 0.5s' }} />
-          </div>
-        </div>
-        <div style={{ background: '#020617', padding: '16px', borderRadius: '4px', border: '1px solid #1e293b', fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', color: '#94a3b8' }}>
-          <div>$ Initializing audit sequence...</div>
-          <div>$ Parsing Solidity AST...</div>
-          <div>$ Building knowledge graph...</div>
-          <div>$ Running static analysis agents...</div>
-          <div style={{ color: '#3b82f6' }}>&gt; Analyzing contract logic (still working)... <span className="blink">_</span></div>
-        </div>
-        <style>{`
-          @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0; } 100% { opacity: 1; } }
-          .blink { animation: blink 1s step-end infinite; }
-        `}</style>
-      </div>
-    );
-  }
-
-  // 2. Error state (status == 'failed' or fetch error)
   if (status === 'failed' || error) {
     return (
-      <div style={containerStyle}>
-        <h2 style={{ fontSize: '24px', fontWeight: 600, color: '#ef4444' }}>Audit failed to complete</h2>
-        <p style={{ color: '#94a3b8' }}>{error || 'An internal error occurred during the audit execution.'}</p>
+      <div className="w-full mt-4 text-error p-4 bg-[#93000a]/20 border border-error rounded">
+        <strong>Audit failed to complete:</strong> {error || 'An internal error occurred.'}
       </div>
     );
   }
 
-  // Loading state for fetching findings (should be very fast, but just in case)
   if (loading) {
-    return <div style={containerStyle}>Loading findings...</div>;
+    return <div className="text-on-surface-variant p-4">Loading findings...</div>;
   }
 
-  // 3. Clean Empty State (status == 'completed' && findings.length == 0)
   if (status === 'completed' && findings.length === 0) {
     return (
-      <div style={{ ...containerStyle, textAlign: 'center', padding: '48px 24px' }}>
-        <div style={{ fontSize: '48px', marginBottom: '16px' }}>🛡️</div>
-        <h2 style={{ fontSize: '24px', fontWeight: 600, marginBottom: '8px', color: '#10b981' }}>No vulnerabilities detected</h2>
-        <p style={{ color: '#94a3b8', maxWidth: '400px', margin: '0 auto' }}>
+      <div className="w-full mt-4 flex flex-col items-center justify-center p-12 bg-surface-container-low border border-outline-variant rounded-xl">
+        <div className="text-4xl mb-4">🛡️</div>
+        <h2 className="font-headline-md text-headline-md font-bold mb-2 text-primary">No vulnerabilities detected</h2>
+        <p className="text-on-surface-variant max-w-md text-center font-body-md text-body-md">
           The security scan completed successfully. No critical, medium, or low risk issues were found in the scanned contract logic.
         </p>
       </div>
     );
   }
 
-  // 4. Populated List
+  // Count stats
+  const highCount = findings.filter(f => f.risk_level.toUpperCase() === 'HIGH').length;
+  const unknownCount = findings.filter(f => f.risk_level.toUpperCase() === 'UNKNOWN').length;
+  const lowCount = findings.filter(f => f.risk_level.toUpperCase() === 'LOW').length;
+
   return (
-    <div style={containerStyle}>
-      <h2 style={{ fontSize: '24px', fontWeight: 600, marginBottom: '16px' }}>Security Findings</h2>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+    <div className="w-full mt-8">
+      {/* Header Section */}
+      <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="material-symbols-outlined text-on-surface-variant text-sm">folder_open</span>
+            <span className="font-code-md text-code-md text-on-surface-variant">Target Contract / Function Scan</span>
+          </div>
+          <h2 className="font-headline-lg text-headline-lg text-on-surface m-0">Vulnerability Findings</h2>
+        </div>
+
+        {/* Quick Stats / Progress */}
+        <div className="flex gap-4">
+          <div className="bg-surface-container-low border border-outline-variant rounded p-3 flex flex-col items-center min-w-[80px]">
+            <span className="font-headline-sm text-headline-sm text-error">{highCount}</span>
+            <span className="font-label-caps text-label-caps text-on-surface-variant mt-1">HIGH</span>
+          </div>
+          <div className="bg-surface-container-low border border-outline-variant rounded p-3 flex flex-col items-center min-w-[80px]">
+            <span className="font-headline-sm text-headline-sm text-tertiary">{unknownCount}</span>
+            <span className="font-label-caps text-label-caps text-on-surface-variant mt-1">UNKNOWN</span>
+          </div>
+          <div className="bg-surface-container-low border border-outline-variant rounded p-3 flex flex-col items-center min-w-[80px]">
+            <span className="font-headline-sm text-headline-sm text-primary">{lowCount}</span>
+            <span className="font-label-caps text-label-caps text-on-surface-variant mt-1">LOW</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Findings List (Bento-style stacked cards) */}
+      <div className="flex flex-col gap-4 max-w-5xl">
         {findings.map((f) => {
-          const colors = getRiskColor(f.risk_level);
+          let themeColor = 'outline-variant';
+          let bgColor = 'bg-surface-container-low';
+          let hoverBorder = 'hover:border-outline-variant';
+          let pillBg = 'bg-surface';
+          let pillText = 'text-on-surface';
+          let pillBorder = 'border-outline-variant';
+
+          switch (f.risk_level.toUpperCase()) {
+            case 'HIGH':
+              themeColor = 'bg-error';
+              hoverBorder = 'hover:border-error';
+              pillBg = 'bg-[#ffb4ab]/10';
+              pillText = 'text-error';
+              pillBorder = 'border-[#ffb4ab]/20';
+              break;
+            case 'UNKNOWN':
+              themeColor = 'bg-tertiary';
+              hoverBorder = 'hover:border-tertiary';
+              pillBg = 'bg-[#bcc7de]/10';
+              pillText = 'text-tertiary';
+              pillBorder = 'border-[#bcc7de]/20';
+              break;
+            case 'LOW':
+              themeColor = 'bg-primary';
+              hoverBorder = 'hover:border-primary';
+              pillBg = 'bg-[#adc6ff]/10';
+              pillText = 'text-primary';
+              pillBorder = 'border-[#adc6ff]/20';
+              break;
+          }
+
           return (
-            <div key={f.id} style={{ 
-              background: '#0f172a', 
-              border: '1px solid #1e293b', 
-              borderRadius: '8px',
-              padding: '16px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-              position: 'relative',
-              overflow: 'hidden'
-            }}>
-              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '4px', background: colors.border }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', paddingLeft: '8px' }}>
-                <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '14px', fontWeight: 600, color: '#d4e4fa' }}>
-                  {f.function_name}
+            <div key={f.id} className={`bg-surface-container-low border border-outline-variant rounded relative flex flex-col transition-colors duration-200 group ${hoverBorder}`}>
+              <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l ${themeColor}`}></div>
+              <div className="p-6 pl-8">
+                
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className={`${pillBg} ${pillText} font-label-caps text-label-caps px-2 py-1 rounded-full border ${pillBorder}`}>
+                      {f.risk_level.toUpperCase()} RISK
+                    </span>
+                    <span className="bg-surface-container-highest text-on-surface font-label-caps text-label-caps px-2 py-1 rounded border border-outline-variant flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[14px]">speed</span> Score {f.risk_score}
+                    </span>
+                    <span className="text-on-surface-variant font-body-sm text-body-sm px-2 py-1 bg-surface-container rounded">
+                      {formatAttackType(f.attack_type)}
+                    </span>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <span style={{ 
-                    background: '#1e293b', 
-                    color: '#94a3b8', 
-                    padding: '2px 8px', 
-                    borderRadius: '4px', 
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    textTransform: 'uppercase'
-                  }}>
-                    {formatAttackType(f.attack_type)}
-                  </span>
-                  <span style={{ 
-                    background: colors.bg, 
-                    color: colors.text, 
-                    padding: '2px 8px', 
-                    borderRadius: '9999px', 
-                    fontSize: '11px', 
-                    fontWeight: 700,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}>
-                    {f.risk_level.toUpperCase()} <span style={{ opacity: 0.8 }}>({f.risk_score}/10)</span>
-                  </span>
+
+                <div className="mb-4">
+                  <h3 className="font-code-md text-code-md text-inverse-surface mb-2 bg-surface p-2 rounded inline-block border border-outline-variant">
+                    {f.function_name}
+                  </h3>
+                  <p className="font-body-md text-body-md text-on-surface-variant max-w-3xl leading-relaxed">
+                    {f.description}
+                  </p>
                 </div>
+
               </div>
-              <p style={{ margin: 0, fontSize: '13px', lineHeight: '20px', color: '#c2c6d6', paddingLeft: '8px' }}>
-                {f.description}
-              </p>
             </div>
           );
         })}
