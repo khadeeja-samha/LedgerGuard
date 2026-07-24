@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { API_BASE_URL } from '@/config';
 
 type AgentAction = {
   id: string;
@@ -21,7 +22,7 @@ export default function AgentLogView({ auditRunId, status }: { auditRunId: strin
 
     const fetchLogs = async () => {
       try {
-        const res = await fetch(`http://localhost:8000/api/audit/${auditRunId}/agent-log`);
+        const res = await fetch(`${API_BASE_URL}/api/audit/${auditRunId}/agent-log`);
         if (res.ok) {
           const data = await res.json();
           setLogs(data);

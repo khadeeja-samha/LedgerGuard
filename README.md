@@ -135,6 +135,34 @@ cd backend
 python -m pytest tests/ -v
 ```
 
+## Deployment
+
+### 1. Production Docker Setup
+LedgerGuard backend and databases (`neo4j` and `postgres`) can be deployed together using Docker Compose.
+
+```bash
+# Copy and update environment configuration
+cp .env.example .env
+
+# Spin up all services
+docker compose up -d --build
+```
+
+### 2. Architecture & Operational Constraints
+
+- **Single Uvicorn Worker Constraint (`--workers 1`):**
+  Uvicorn MUST be run with `--workers 1`. The `pipeline_lock` in [`backend/app/api/audit.py`](file:///d:/Workspace/Personal/Hackathon/Ledgerguard/backend/app/api/audit.py) is an in-process Python lock (`asyncio.Lock` / `threading.Lock`). Multiple Uvicorn worker processes operate in isolated memory spaces, rendering the lock ineffective across processes and reintroducing Hardhat filesystem race conditions and account nonce collisions during concurrent audits.
+
+- **Co-located Hardhat & Backend Subprocess:**
+  The backend programmatically shells out to `npx hardhat` inside `backend/blockchain/`. Therefore, Node.js 20.x and `npm install` dependencies are co-located in the same container (`backend/Dockerfile`) alongside Python 3.11.
+
+- **Separate Frontend Deployment (Vercel):**
+  The Next.js frontend is designed to be deployed separately (e.g., on Vercel). When deploying the frontend, configure the environment variable:
+  ```env
+  NEXT_PUBLIC_API_URL=https://your-backend-api-domain.com
+  ```
+  Ensure `ALLOWED_ORIGINS` in your backend `.env` includes your frontend production URL (e.g., `ALLOWED_ORIGINS=https://your-app.vercel.app`).
+
 ## Project Structure
 
 ```

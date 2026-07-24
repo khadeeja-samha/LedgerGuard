@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { API_BASE_URL } from '@/config';
 import GraphViewer from './components/GraphViewer';
 import FindingsReport from './components/FindingsReport';
 import AgentLogView from './components/AgentLogView';
@@ -30,7 +31,7 @@ export default function Home() {
     if (auditRunId && (status === 'queued' || status === 'running') && !window.location.search.includes('forceId')) {
       intervalId = setInterval(async () => {
         try {
-          const res = await fetch(`http://localhost:8000/api/audit/${auditRunId}/status`);
+          const res = await fetch(`${API_BASE_URL}/api/audit/${auditRunId}/status`);
           if (res.ok) {
             const data = await res.json();
             setStatus(data.status);
@@ -54,7 +55,7 @@ export default function Home() {
     setStatus('running'); // visual optimism until queued arrives
 
     try {
-      const res = await fetch('http://localhost:8000/api/audit/start', {
+      const res = await fetch(`${API_BASE_URL}/api/audit/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

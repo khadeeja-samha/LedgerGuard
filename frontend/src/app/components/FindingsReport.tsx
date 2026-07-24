@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { API_BASE_URL } from '@/config';
 
 type Finding = {
   id: string;
@@ -37,7 +38,7 @@ export default function FindingsReport({ auditRunId, status }: FindingsReportPro
       const fetchFindings = async () => {
         setLoading(true);
         try {
-          const res = await fetch(`http://localhost:8000/api/audit/${auditRunId}/findings`);
+          const res = await fetch(`${API_BASE_URL}/api/audit/${auditRunId}/findings`);
           if (!res.ok) throw new Error('Failed to fetch findings');
           const data: Finding[] = await res.json();
           const sorted = data.sort((a, b) => b.risk_score - a.risk_score);

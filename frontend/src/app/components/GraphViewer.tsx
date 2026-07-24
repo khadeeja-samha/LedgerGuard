@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { API_BASE_URL } from '@/config';
 
 // ForceGraph2D requires dynamic import with SSR disabled
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false });
@@ -39,7 +40,7 @@ export default function GraphViewer({ contractId }: { contractId: string }) {
   useEffect(() => {
     const fetchGraph = async () => {
       try {
-        const res = await fetch(`http://localhost:8000/api/audit/${contractId}/graph`);
+        const res = await fetch(`${API_BASE_URL}/api/audit/${contractId}/graph`);
         if (!res.ok) {
           throw new Error(`Failed to fetch graph: ${res.status}`);
         }

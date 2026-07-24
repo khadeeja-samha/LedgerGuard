@@ -7,7 +7,7 @@ pydantic
 pytest
 neo4j
 python-dotenv
-web3
+web3>=7.16.0
 requests
 openai
 psycopg2-binary
